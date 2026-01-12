@@ -1,22 +1,14 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React from 'react';
 import {
   View,
   StyleSheet,
   Text,
   TouchableOpacity,
-  Dimensions,
 } from 'react-native';
-import MapView, {
-  Marker,
-  PROVIDER_GOOGLE,
-  Circle,
-  Polyline,
-  Region,
-  MapStyleElement,
-} from 'react-native-maps';
 import { GPSLocation } from '../types';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+// Note: react-native-maps temporarily disabled due to incompatibility with RN 0.73.4
+// Will be re-enabled when upgrading to RN 0.74+
 
 interface LocationMapProps {
   location: GPSLocation | null;
@@ -29,148 +21,12 @@ interface LocationMapProps {
   onPress?: () => void;
 }
 
-const DARK_MAP_STYLE: MapStyleElement[] = [
-  { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
-  {
-    featureType: 'administrative.locality',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#d59563' }],
-  },
-  {
-    featureType: 'poi',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#d59563' }],
-  },
-  {
-    featureType: 'poi.park',
-    elementType: 'geometry',
-    stylers: [{ color: '#263c3f' }],
-  },
-  {
-    featureType: 'poi.park',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#6b9a76' }],
-  },
-  {
-    featureType: 'road',
-    elementType: 'geometry',
-    stylers: [{ color: '#38414e' }],
-  },
-  {
-    featureType: 'road',
-    elementType: 'geometry.stroke',
-    stylers: [{ color: '#212a37' }],
-  },
-  {
-    featureType: 'road',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#9ca5b3' }],
-  },
-  {
-    featureType: 'road.highway',
-    elementType: 'geometry',
-    stylers: [{ color: '#746855' }],
-  },
-  {
-    featureType: 'road.highway',
-    elementType: 'geometry.stroke',
-    stylers: [{ color: '#1f2835' }],
-  },
-  {
-    featureType: 'road.highway',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#f3d19c' }],
-  },
-  {
-    featureType: 'transit',
-    elementType: 'geometry',
-    stylers: [{ color: '#2f3948' }],
-  },
-  {
-    featureType: 'transit.station',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#d59563' }],
-  },
-  {
-    featureType: 'water',
-    elementType: 'geometry',
-    stylers: [{ color: '#17263c' }],
-  },
-  {
-    featureType: 'water',
-    elementType: 'labels.text.fill',
-    stylers: [{ color: '#515c6d' }],
-  },
-  {
-    featureType: 'water',
-    elementType: 'labels.text.stroke',
-    stylers: [{ color: '#17263c' }],
-  },
-];
-
 export const LocationMap: React.FC<LocationMapProps> = ({
   location,
-  showUserMarker = true,
-  showAccuracyCircle = true,
-  showPath = false,
-  pathHistory = [],
   style,
   compact = false,
   onPress,
 }) => {
-  const mapRef = useRef<MapView>(null);
-  const [region, setRegion] = useState<Region>({
-    latitude: location?.latitude ?? 0,
-    longitude: location?.longitude ?? 0,
-    latitudeDelta: compact ? 0.005 : 0.01,
-    longitudeDelta: compact ? 0.005 : 0.01,
-  });
-
-  useEffect(() => {
-    if (location && mapRef.current) {
-      mapRef.current.animateToRegion(
-        {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          latitudeDelta: region.latitudeDelta,
-          longitudeDelta: region.longitudeDelta,
-        },
-        500
-      );
-    }
-  }, [location, region.latitudeDelta, region.longitudeDelta]);
-
-  const handleCenterOnUser = () => {
-    if (location && mapRef.current) {
-      mapRef.current.animateToRegion(
-        {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        },
-        300
-      );
-    }
-  };
-
-  if (!location) {
-    return (
-      <View style={[styles.container, compact && styles.compactContainer, style]}>
-        <View style={styles.placeholder}>
-          <Text style={styles.placeholderText}>Location unavailable</Text>
-        </View>
-      </View>
-    );
-  }
-
-  const pathCoordinates = pathHistory.map((loc) => ({
-    latitude: loc.latitude,
-    longitude: loc.longitude,
-  }));
-
   return (
     <TouchableOpacity
       style={[styles.container, compact && styles.compactContainer, style]}
@@ -178,101 +34,31 @@ export const LocationMap: React.FC<LocationMapProps> = ({
       activeOpacity={onPress ? 0.9 : 1}
       disabled={!onPress}
     >
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        provider={PROVIDER_GOOGLE}
-        customMapStyle={DARK_MAP_STYLE}
-        initialRegion={region}
-        onRegionChangeComplete={setRegion}
-        showsUserLocation={false}
-        showsMyLocationButton={false}
-        showsCompass={!compact}
-        showsScale={!compact}
-        rotateEnabled={!compact}
-        scrollEnabled={!compact}
-        zoomEnabled={!compact}
-        pitchEnabled={false}
-      >
-        {showUserMarker && (
-          <Marker
-            coordinate={{
-              latitude: location.latitude,
-              longitude: location.longitude,
-            }}
-            title="User Location"
-            description={`Accuracy: ${location.accuracy?.toFixed(0) ?? 'N/A'}m`}
-          >
-            <View style={styles.markerContainer}>
-              <View style={styles.markerOuter}>
-                <View style={styles.markerInner} />
-              </View>
-              {location.heading !== undefined && (
-                <View
-                  style={[
-                    styles.headingIndicator,
-                    { transform: [{ rotate: `${location.heading}deg` }] },
-                  ]}
-                />
-              )}
-            </View>
-          </Marker>
-        )}
-
-        {showAccuracyCircle && location.accuracy && (
-          <Circle
-            center={{
-              latitude: location.latitude,
-              longitude: location.longitude,
-            }}
-            radius={location.accuracy}
-            strokeColor="rgba(0, 122, 255, 0.5)"
-            fillColor="rgba(0, 122, 255, 0.1)"
-            strokeWidth={1}
-          />
-        )}
-
-        {showPath && pathCoordinates.length > 1 && (
-          <Polyline
-            coordinates={pathCoordinates}
-            strokeColor="#007AFF"
-            strokeWidth={3}
-            lineDashPattern={[1]}
-          />
-        )}
-      </MapView>
-
-      {/* Location info overlay */}
-      {!compact && (
-        <View style={styles.infoOverlay}>
-          <Text style={styles.infoText}>
-            {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
-          </Text>
-          {location.accuracy && (
-            <Text style={styles.accuracyText}>
-              ±{location.accuracy.toFixed(0)}m
+      <View style={styles.placeholder}>
+        <Text style={styles.placeholderTitle}>Map View</Text>
+        {location ? (
+          <>
+            <Text style={styles.coordsText}>
+              {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
             </Text>
-          )}
-          {location.speed !== undefined && location.speed > 0 && (
-            <Text style={styles.speedText}>
-              {(location.speed * 3.6).toFixed(1)} km/h
-            </Text>
-          )}
-        </View>
-      )}
-
-      {/* Center button */}
-      {!compact && (
-        <TouchableOpacity
-          style={styles.centerButton}
-          onPress={handleCenterOnUser}
-        >
-          <View style={styles.centerIcon} />
-        </TouchableOpacity>
-      )}
+            {location.accuracy && (
+              <Text style={styles.accuracyText}>
+                Accuracy: ±{location.accuracy.toFixed(0)}m
+              </Text>
+            )}
+            {location.speed !== undefined && location.speed > 0 && (
+              <Text style={styles.speedText}>
+                Speed: {(location.speed * 3.6).toFixed(1)} km/h
+              </Text>
+            )}
+          </>
+        ) : (
+          <Text style={styles.placeholderText}>Location unavailable</Text>
+        )}
+      </View>
 
       {/* Compact location badge */}
-      {compact && (
+      {compact && location && (
         <View style={styles.compactBadge}>
           <Text style={styles.compactBadgeText}>LIVE</Text>
         </View>
@@ -309,91 +95,38 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#333',
   },
-  map: {
-    flex: 1,
-  },
   placeholder: {
     flex: 1,
     backgroundColor: '#1a1a1a',
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
+  },
+  placeholderTitle: {
+    color: '#007AFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8,
   },
   placeholderText: {
     color: '#666',
     fontSize: 14,
   },
-  markerContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  markerOuter: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0, 122, 255, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  markerInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#007AFF',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  headingIndicator: {
-    position: 'absolute',
-    top: -8,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderBottomWidth: 10,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: '#007AFF',
-  },
-  infoOverlay: {
-    position: 'absolute',
-    bottom: 10,
-    left: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    borderRadius: 8,
-    padding: 8,
-  },
-  infoText: {
+  coordsText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 14,
     fontFamily: 'monospace',
+    marginBottom: 4,
   },
   accuracyText: {
     color: '#007AFF',
-    fontSize: 10,
-    marginTop: 2,
+    fontSize: 12,
+    marginTop: 4,
   },
   speedText: {
     color: '#00FF00',
-    fontSize: 10,
-    marginTop: 2,
-  },
-  centerButton: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  centerIcon: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#007AFF',
+    fontSize: 12,
+    marginTop: 4,
   },
   compactBadge: {
     position: 'absolute',

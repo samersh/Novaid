@@ -1,9 +1,6 @@
 module.exports = {
   dependencies: {
-    'react-native-maps': {
-      platforms: {
-        ios: null, // Disable autolinking for iOS to avoid get_folly_config error
-      },
-    },
+    // react-native-maps removed due to incompatibility with RN 0.73.4
+    // Can be re-added when upgrading to RN 0.74+
   },
 };
