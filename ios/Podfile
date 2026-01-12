@@ -25,11 +25,8 @@ target 'Novaid' do
   # WebRTC
   pod 'react-native-webrtc', :path => '../node_modules/react-native-webrtc'
 
-  # Maps
-  pod 'react-native-maps', :path => '../node_modules/react-native-maps'
-  pod 'react-native-google-maps', :path => '../node_modules/react-native-maps'
-  pod 'GoogleMaps'
-  pod 'Google-Maps-iOS-Utils'
+  # Maps - using Apple Maps (autolinking handles react-native-maps)
+  # Google Maps pods removed to avoid get_folly_config error
 
   # Location
   pod 'react-native-geolocation-service', :path => '../node_modules/react-native-geolocation-service'
