@@ -21,6 +21,13 @@ if linkage != nil
   use_frameworks! :linkage => linkage.to_sym
 end
 
+# react-native-permissions setup
+def node_require(script)
+  require Pod::Executable.execute_command('node', ['-p',
+    "require.resolve('#{script}', {paths: [process.argv[1]]})", __dir__]).strip
+end
+node_require('react-native-permissions/scripts/setup.rb')
+
 target 'Novaid' do
   config = use_native_modules!
 
@@ -29,22 +36,14 @@ target 'Novaid' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
-  # WebRTC
-  pod 'react-native-webrtc', :path => '../node_modules/react-native-webrtc'
-
-  # Location
-  pod 'react-native-geolocation-service', :path => '../node_modules/react-native-geolocation-service'
-
-  # Permissions
-  pod 'RNPermissions', :path => '../node_modules/react-native-permissions'
-
-  # Permissions handlers
-  permissions_path = '../node_modules/react-native-permissions/ios'
-  pod 'Permission-Camera', :path => "#{permissions_path}/Camera"
-  pod 'Permission-LocationAccuracy', :path => "#{permissions_path}/LocationAccuracy"
-  pod 'Permission-LocationAlways', :path => "#{permissions_path}/LocationAlways"
-  pod 'Permission-LocationWhenInUse', :path => "#{permissions_path}/LocationWhenInUse"
-  pod 'Permission-Microphone', :path => "#{permissions_path}/Microphone"
+  # Permissions - use setup_permissions to configure which handlers to include
+  setup_permissions([
+    'Camera',
+    'LocationAccuracy',
+    'LocationAlways',
+    'LocationWhenInUse',
+    'Microphone',
+  ])
 
   target 'NovaidTests' do
     inherit! :complete
