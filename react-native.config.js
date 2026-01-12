@@ -1,6 +1,12 @@
 module.exports = {
   dependencies: {
-    // react-native-maps removed due to incompatibility with RN 0.73.4
-    // Can be re-added when upgrading to RN 0.74+
+    // Explicitly disable react-native-maps for all platforms
+    // This prevents any cached references from being used
+    'react-native-maps': {
+      platforms: {
+        ios: null,
+        android: null,
+      },
+    },
   },
 };
