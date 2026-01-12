@@ -1,3 +1,10 @@
+# Remove react-native-maps before autolinking (incompatible with RN 0.73.4)
+react_native_maps_path = File.join(__dir__, '..', 'node_modules', 'react-native-maps')
+if File.exist?(react_native_maps_path)
+  FileUtils.rm_rf(react_native_maps_path)
+  Pod::UI.puts "Removed react-native-maps (incompatible with RN 0.73.4)".yellow
+end
+
 # Resolve react_native_pods.rb with node to allow for hoisting
 require Pod::Executable.execute_command('node', ['-p',
   'require.resolve(
@@ -15,8 +22,7 @@ if linkage != nil
 end
 
 target 'Novaid' do
-  # Exclude react-native-maps from autolinking (incompatible with RN 0.73.4)
-  config = use_native_modules!(exclude: ['react-native-maps'])
+  config = use_native_modules!
 
   use_react_native!(
     :path => config[:reactNativePath],
