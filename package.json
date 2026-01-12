@@ -10,7 +10,8 @@
     "test": "jest",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "clean": "cd android && ./gradlew clean && cd .. && cd ios && xcodebuild clean && cd ..",
-    "pod-install": "cd ios && pod install && cd .."
+    "pod-install": "cd ios && pod install && cd ..",
+    "postinstall": "rm -rf node_modules/react-native-maps"
   },
   "dependencies": {
     "react": "18.2.0",
