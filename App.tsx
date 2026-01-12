@@ -7,6 +7,7 @@ import { StyleSheet } from 'react-native';
 
 import { AppProvider } from './src/context/AppContext';
 import {
+  WelcomeScreen,
   HomeScreen,
   UserScreen,
   ProfessionalScreen,
@@ -23,14 +24,19 @@ const App: React.FC = () => {
         <AppProvider>
           <NavigationContainer>
             <Stack.Navigator
-              initialRouteName="Home"
+              initialRouteName="Welcome"
               screenOptions={{
                 headerShown: false,
                 animation: 'slide_from_right',
                 gestureEnabled: true,
-                contentStyle: { backgroundColor: '#1a1a1a' },
+                contentStyle: { backgroundColor: '#0a0a0a' },
               }}
             >
+              <Stack.Screen
+                name="Welcome"
+                component={WelcomeScreen}
+                options={{ animation: 'fade' }}
+              />
               <Stack.Screen name="Home" component={HomeScreen} />
               <Stack.Screen name="UserScreen" component={UserScreen} />
               <Stack.Screen name="ProfessionalScreen" component={ProfessionalScreen} />

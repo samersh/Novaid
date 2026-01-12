@@ -106,6 +106,7 @@ export type SocketEvent =
 
 // Navigation Types
 export type RootStackParamList = {
+  Welcome: undefined;
   Home: undefined;
   UserScreen: undefined;
   ProfessionalScreen: undefined;
