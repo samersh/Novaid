@@ -28,24 +28,25 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Novaid needs access to your camera to share video with professionals during remote assistance sessions.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Novaid needs access to your location to help professionals locate you during remote assistance.</string>
-	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Novaid needs access to your location to help professionals locate you during remote assistance.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Novaid needs access to your location to help professionals locate you during remote assistance.</string>
+	<string>Novaid needs camera access to share video during remote assistance calls</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Novaid needs access to your microphone for voice communication during remote assistance sessions.</string>
+	<string>Novaid needs microphone access for voice communication during calls</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string></string>
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>audio</string>
-		<string>location</string>
 		<string>voip</string>
+		<string>audio</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

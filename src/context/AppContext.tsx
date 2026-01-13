@@ -1,383 +1,377 @@
-import React, {
-  createContext,
-  useContext,
-  useReducer,
-  useEffect,
-  useCallback,
-  ReactNode,
-} from 'react';
-import { User, GPSLocation, Annotation, CallState } from '../types';
-import { userService } from '../services/UserService';
-import { socketService } from '../services/SocketService';
-import { webRTCService } from '../services/WebRTCService';
-import { locationService } from '../services/LocationService';
-import { annotationService } from '../services/AnnotationService';
-
-// State types
-interface AppState {
-  user: User | null;
-  isInitialized: boolean;
-  isConnectedToServer: boolean;
-  callState: CallState;
-  location: GPSLocation | null;
-  remoteLocation: GPSLocation | null;
-  annotations: Annotation[];
-  isFrozen: boolean;
-  incomingCall: { callerId: string; callerCode: string } | null;
-  currentSessionId: string | null;
-  remoteUserId: string | null;
-  error: string | null;
-}
-
-const initialState: AppState = {
-  user: null,
-  isInitialized: false,
-  isConnectedToServer: false,
-  callState: {
-    isConnected: false,
-    isConnecting: false,
-    isCalling: false,
-    isReceiving: false,
-    localStream: null,
-    remoteStream: null,
-    error: null,
-  },
-  location: null,
-  remoteLocation: null,
-  annotations: [],
-  isFrozen: false,
-  incomingCall: null,
-  currentSessionId: null,
-  remoteUserId: null,
-  error: null,
-};
+import React, { createContext, useContext, useReducer, useCallback, useEffect, ReactNode } from 'react';
+import { AppState, User, CallSession, CallState, UserRole, Annotation } from '../types';
+import { SignalingService } from '../services/SignalingService';
+import { WebRTCService } from '../services/WebRTCService';
+import { userIdService } from '../services/UserIdService';
+import { annotationService, AnnotationService } from '../services/AnnotationService';
+import { VideoStabilizer } from '../services/VideoStabilizer';
+import { MediaStream } from 'react-native-webrtc';
 
 // Action types
 type AppAction =
   | { type: 'SET_USER'; payload: User }
-  | { type: 'SET_INITIALIZED'; payload: boolean }
-  | { type: 'SET_CONNECTED_TO_SERVER'; payload: boolean }
-  | { type: 'UPDATE_CALL_STATE'; payload: Partial<CallState> }
-  | { type: 'SET_LOCATION'; payload: GPSLocation }
-  | { type: 'SET_REMOTE_LOCATION'; payload: GPSLocation }
-  | { type: 'SET_ANNOTATIONS'; payload: Annotation[] }
+  | { type: 'SET_SESSION'; payload: CallSession | null }
+  | { type: 'UPDATE_SESSION'; payload: Partial<CallSession> }
+  | { type: 'SET_CALL_STATE'; payload: CallState }
+  | { type: 'SET_CONNECTED'; payload: boolean }
+  | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'ADD_ANNOTATION'; payload: Annotation }
   | { type: 'CLEAR_ANNOTATIONS' }
-  | { type: 'SET_FROZEN'; payload: boolean }
-  | { type: 'SET_INCOMING_CALL'; payload: { callerId: string; callerCode: string } | null }
-  | { type: 'SET_SESSION'; payload: { sessionId: string; remoteUserId: string } }
-  | { type: 'CLEAR_SESSION' }
-  | { type: 'SET_ERROR'; payload: string | null };
+  | { type: 'SET_VIDEO_FROZEN'; payload: boolean }
+  | { type: 'RESET' };
+
+// Initial state
+const initialState: AppState = {
+  user: null,
+  currentSession: null,
+  isConnectedToServer: false,
+  error: null,
+};
 
 // Reducer
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_USER':
       return { ...state, user: action.payload };
-    case 'SET_INITIALIZED':
-      return { ...state, isInitialized: action.payload };
-    case 'SET_CONNECTED_TO_SERVER':
-      return { ...state, isConnectedToServer: action.payload };
-    case 'UPDATE_CALL_STATE':
-      return { ...state, callState: { ...state.callState, ...action.payload } };
-    case 'SET_LOCATION':
-      return { ...state, location: action.payload };
-    case 'SET_REMOTE_LOCATION':
-      return { ...state, remoteLocation: action.payload };
-    case 'SET_ANNOTATIONS':
-      return { ...state, annotations: action.payload };
-    case 'ADD_ANNOTATION':
-      return { ...state, annotations: [...state.annotations, action.payload] };
-    case 'CLEAR_ANNOTATIONS':
-      return { ...state, annotations: [] };
-    case 'SET_FROZEN':
-      return { ...state, isFrozen: action.payload };
-    case 'SET_INCOMING_CALL':
-      return { ...state, incomingCall: action.payload };
     case 'SET_SESSION':
+      return { ...state, currentSession: action.payload };
+    case 'UPDATE_SESSION':
+      if (!state.currentSession) return state;
       return {
         ...state,
-        currentSessionId: action.payload.sessionId,
-        remoteUserId: action.payload.remoteUserId,
+        currentSession: { ...state.currentSession, ...action.payload },
       };
-    case 'CLEAR_SESSION':
+    case 'SET_CALL_STATE':
+      if (!state.currentSession) return state;
       return {
         ...state,
-        currentSessionId: null,
-        remoteUserId: null,
-        callState: initialState.callState,
-        annotations: [],
-        isFrozen: false,
+        currentSession: { ...state.currentSession, state: action.payload },
       };
+    case 'SET_CONNECTED':
+      return { ...state, isConnectedToServer: action.payload };
     case 'SET_ERROR':
       return { ...state, error: action.payload };
+    case 'ADD_ANNOTATION':
+      if (!state.currentSession) return state;
+      return {
+        ...state,
+        currentSession: {
+          ...state.currentSession,
+          annotations: [...state.currentSession.annotations, action.payload],
+        },
+      };
+    case 'CLEAR_ANNOTATIONS':
+      if (!state.currentSession) return state;
+      return {
+        ...state,
+        currentSession: { ...state.currentSession, annotations: [] },
+      };
+    case 'SET_VIDEO_FROZEN':
+      if (!state.currentSession) return state;
+      return {
+        ...state,
+        currentSession: { ...state.currentSession, isVideoFrozen: action.payload },
+      };
+    case 'RESET':
+      return initialState;
     default:
       return state;
   }
 }
 
-// Context
-interface AppContextType {
+// Context types
+interface AppContextValue {
   state: AppState;
-  dispatch: React.Dispatch<AppAction>;
-  initializeApp: (role: 'user' | 'professional') => Promise<void>;
-  initiateCall: () => Promise<void>;
+  signalingService: SignalingService | null;
+  webRTCService: WebRTCService | null;
+  annotationService: AnnotationService;
+  videoStabilizer: VideoStabilizer;
+  localStream: MediaStream | null;
+  remoteStream: MediaStream | null;
+  initializeUser: (role: UserRole) => Promise<User>;
+  connectToServer: () => Promise<void>;
+  startCall: () => Promise<void>;
   acceptCall: (callerId: string) => Promise<void>;
   rejectCall: (callerId: string) => void;
   endCall: () => void;
-  toggleMute: () => boolean;
-  toggleVideo: () => boolean;
-  switchCamera: () => void;
   sendAnnotation: (annotation: Annotation) => void;
-  clearAnnotations: () => void;
-  freezeFrame: () => void;
-  resumeFrame: () => void;
+  freezeVideo: () => void;
+  resumeVideo: () => void;
+  clearError: () => void;
 }
 
-const AppContext = createContext<AppContextType | null>(null);
+// Create context
+const AppContext = createContext<AppContextValue | null>(null);
+
+// Server URL - can be configured via environment
+const SIGNALING_SERVER_URL = process.env.SIGNALING_SERVER_URL || 'ws://localhost:3001';
 
 // Provider component
-export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+interface AppProviderProps {
+  children: ReactNode;
+}
+
+export function AppProvider({ children }: AppProviderProps) {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
-  // Initialize app
-  const initializeApp = useCallback(async (role: 'user' | 'professional') => {
+  // Services refs (using refs to prevent re-renders)
+  const [signalingService, setSignalingService] = React.useState<SignalingService | null>(null);
+  const [webRTCService, setWebRTCService] = React.useState<WebRTCService | null>(null);
+  const [localStream, setLocalStream] = React.useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = React.useState<MediaStream | null>(null);
+
+  // Video stabilizer (always available)
+  const videoStabilizer = React.useMemo(() => new VideoStabilizer(), []);
+
+  // Initialize user
+  const initializeUser = useCallback(async (role: UserRole): Promise<User> => {
     try {
-      // Initialize user
-      const user = await userService.initializeUser(role);
+      const user = await userIdService.initializeUser(role);
       dispatch({ type: 'SET_USER', payload: user });
-
-      // Connect to signaling server
-      await socketService.connect(user.id, role);
-      dispatch({ type: 'SET_CONNECTED_TO_SERVER', payload: true });
-
-      // Set up socket event handlers
-      setupSocketHandlers();
-
-      // Set up WebRTC handlers
-      setupWebRTCHandlers();
-
-      // Start location tracking for users
-      if (role === 'user') {
-        await locationService.startTracking();
-        locationService.onLocationUpdate((location) => {
-          dispatch({ type: 'SET_LOCATION', payload: location });
-          if (state.callState.isConnected) {
-            socketService.sendLocation(location);
-          }
-        });
-      }
-
-      // Set up annotation handlers
-      annotationService.onAnnotationsChange((annotations) => {
-        dispatch({ type: 'SET_ANNOTATIONS', payload: annotations });
-      });
-
-      dispatch({ type: 'SET_INITIALIZED', payload: true });
+      return user;
     } catch (error) {
-      console.error('Failed to initialize app:', error);
-      dispatch({ type: 'SET_ERROR', payload: 'Failed to initialize app' });
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to initialize user' });
+      throw error;
     }
-  }, [state.callState.isConnected]);
+  }, []);
 
-  const setupSocketHandlers = useCallback(() => {
-    // Incoming call handler
-    socketService.on('call:incoming', (data) => {
-      dispatch({ type: 'SET_INCOMING_CALL', payload: data });
-    });
+  // Connect to signaling server
+  const connectToServer = useCallback(async (): Promise<void> => {
+    if (!state.user) {
+      throw new Error('User not initialized');
+    }
 
-    // Call accepted handler
-    socketService.on('call:accepted', async (data) => {
-      dispatch({
-        type: 'SET_SESSION',
-        payload: { sessionId: data.sessionId, remoteUserId: data.professionalId },
+    try {
+      const signaling = new SignalingService(state.user.id, SIGNALING_SERVER_URL);
+
+      signaling.on('connected', () => {
+        dispatch({ type: 'SET_CONNECTED', payload: true });
       });
-      dispatch({ type: 'SET_INCOMING_CALL', payload: null });
 
-      // Create and send WebRTC offer
-      try {
-        await webRTCService.startLocalStream(true);
-        const offer = await webRTCService.createOffer();
-        socketService.sendOffer(offer, data.professionalId);
-      } catch (error) {
-        console.error('Failed to create offer:', error);
+      signaling.on('disconnected', () => {
+        dispatch({ type: 'SET_CONNECTED', payload: false });
+      });
+
+      signaling.on('callRequest', (message: any) => {
+        // Create a new session for incoming call
+        const session: CallSession = {
+          id: `session_${Date.now()}`,
+          userId: message.from,
+          state: 'receiving',
+          annotations: [],
+          isVideoFrozen: false,
+        };
+        dispatch({ type: 'SET_SESSION', payload: session });
+      });
+
+      signaling.on('callAccepted', async (message: any) => {
+        dispatch({ type: 'SET_CALL_STATE', payload: 'connecting' });
+      });
+
+      signaling.on('callRejected', () => {
+        dispatch({ type: 'SET_CALL_STATE', payload: 'failed' });
+        dispatch({ type: 'SET_ERROR', payload: 'Call was rejected' });
+      });
+
+      signaling.on('noProfessionalAvailable', () => {
+        dispatch({ type: 'SET_CALL_STATE', payload: 'failed' });
+        dispatch({ type: 'SET_ERROR', payload: 'No professional available' });
+      });
+
+      await signaling.connect();
+      setSignalingService(signaling);
+
+      // Create WebRTC service
+      const webrtc = new WebRTCService(signaling, state.user.id);
+
+      webrtc.on('localStream', (stream: MediaStream) => {
+        setLocalStream(stream);
+      });
+
+      webrtc.on('remoteStream', (stream: MediaStream) => {
+        setRemoteStream(stream);
+      });
+
+      webrtc.on('connected', () => {
+        dispatch({ type: 'SET_CALL_STATE', payload: 'connected' });
+      });
+
+      webrtc.on('disconnected', () => {
+        dispatch({ type: 'SET_CALL_STATE', payload: 'disconnected' });
+      });
+
+      webrtc.on('annotation', (annotation: Annotation) => {
+        dispatch({ type: 'ADD_ANNOTATION', payload: annotation });
+        annotationService.addRemoteAnnotation(annotation);
+      });
+
+      webrtc.on('freezeVideo', () => {
+        dispatch({ type: 'SET_VIDEO_FROZEN', payload: true });
+      });
+
+      webrtc.on('resumeVideo', (data: { annotations: Annotation[] }) => {
+        dispatch({ type: 'SET_VIDEO_FROZEN', payload: false });
+        // Add received annotations
+        data.annotations?.forEach((ann: Annotation) => {
+          dispatch({ type: 'ADD_ANNOTATION', payload: ann });
+          annotationService.addRemoteAnnotation(ann);
+        });
+      });
+
+      webrtc.on('callEnded', () => {
+        endCall();
+      });
+
+      setWebRTCService(webrtc);
+
+      // Register as professional if needed
+      if (state.user.role === 'professional') {
+        signaling.registerAsProfessional();
       }
-    });
+    } catch (error) {
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to connect to server' });
+      throw error;
+    }
+  }, [state.user]);
 
-    // Call rejected handler
-    socketService.on('call:rejected', (data) => {
-      dispatch({ type: 'SET_ERROR', payload: `Call rejected: ${data.reason}` });
-      dispatch({ type: 'CLEAR_SESSION' });
-    });
+  // Start a call (user initiates)
+  const startCall = useCallback(async (): Promise<void> => {
+    if (!webRTCService || !signalingService || !state.user) {
+      throw new Error('Services not initialized');
+    }
 
-    // Call ended handler
-    socketService.on('call:ended', () => {
+    try {
+      // Create session
+      const session: CallSession = {
+        id: `session_${Date.now()}`,
+        userId: state.user.id,
+        state: 'calling',
+        startTime: Date.now(),
+        annotations: [],
+        isVideoFrozen: false,
+      };
+      dispatch({ type: 'SET_SESSION', payload: session });
+
+      // Initialize local stream with rear camera
+      await webRTCService.initializeLocalStream(true);
+
+      // Create peer connection
+      await webRTCService.createPeerConnection();
+
+      // Request a call to available professional
+      signalingService.requestCall();
+    } catch (error) {
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to start call' });
+      throw error;
+    }
+  }, [webRTCService, signalingService, state.user]);
+
+  // Accept incoming call (professional accepts)
+  const acceptCall = useCallback(async (callerId: string): Promise<void> => {
+    if (!webRTCService || !signalingService) {
+      throw new Error('Services not initialized');
+    }
+
+    try {
+      await webRTCService.acceptCall(callerId);
+      dispatch({ type: 'SET_CALL_STATE', payload: 'connecting' });
+    } catch (error) {
+      dispatch({ type: 'SET_ERROR', payload: 'Failed to accept call' });
+      throw error;
+    }
+  }, [webRTCService, signalingService]);
+
+  // Reject incoming call
+  const rejectCall = useCallback((callerId: string): void => {
+    if (webRTCService) {
+      webRTCService.rejectCall(callerId);
+    }
+    dispatch({ type: 'SET_SESSION', payload: null });
+  }, [webRTCService]);
+
+  // End call
+  const endCall = useCallback((): void => {
+    if (webRTCService) {
       webRTCService.endCall();
-      dispatch({ type: 'CLEAR_SESSION' });
-    });
+    }
+    setLocalStream(null);
+    setRemoteStream(null);
+    annotationService.clearAllAnnotations();
+    dispatch({ type: 'SET_SESSION', payload: null });
+  }, [webRTCService]);
 
-    // WebRTC offer handler
-    socketService.on('signal:offer', async (data) => {
-      try {
-        await webRTCService.startLocalStream(false);
-        const answer = await webRTCService.handleOffer(data.offer);
-        socketService.sendAnswer(answer, data.from);
-      } catch (error) {
-        console.error('Failed to handle offer:', error);
-      }
-    });
+  // Send annotation
+  const sendAnnotation = useCallback((annotation: Annotation): void => {
+    if (webRTCService) {
+      webRTCService.sendAnnotation(annotation);
+      dispatch({ type: 'ADD_ANNOTATION', payload: annotation });
+    }
+  }, [webRTCService]);
 
-    // WebRTC answer handler
-    socketService.on('signal:answer', async (data) => {
-      try {
-        await webRTCService.handleAnswer(data.answer);
-      } catch (error) {
-        console.error('Failed to handle answer:', error);
-      }
-    });
+  // Freeze video
+  const freezeVideo = useCallback((): void => {
+    if (webRTCService) {
+      webRTCService.freezeVideo();
+      dispatch({ type: 'SET_VIDEO_FROZEN', payload: true });
+    }
+  }, [webRTCService]);
 
-    // ICE candidate handler
-    socketService.on('signal:ice', (data) => {
-      webRTCService.addIceCandidate(data.candidate);
-    });
+  // Resume video
+  const resumeVideo = useCallback((): void => {
+    if (webRTCService) {
+      const annotations = annotationService.getAllAnnotations();
+      webRTCService.resumeVideo(annotations);
+      dispatch({ type: 'SET_VIDEO_FROZEN', payload: false });
+    }
+  }, [webRTCService]);
 
-    // Location update handler
-    socketService.on('location:update', (data) => {
-      dispatch({ type: 'SET_REMOTE_LOCATION', payload: data.location });
-    });
-
-    // Annotation received handler
-    socketService.on('annotation:received', (data) => {
-      annotationService.addAnnotation(data.annotation);
-    });
-
-    // Annotation clear handler
-    socketService.on('annotation:clear', () => {
-      annotationService.clearAnnotations();
-    });
-
-    // Frame frozen handler
-    socketService.on('frame:frozen', (data) => {
-      dispatch({ type: 'SET_FROZEN', payload: true });
-    });
-
-    // Frame resumed handler
-    socketService.on('frame:resumed', () => {
-      dispatch({ type: 'SET_FROZEN', payload: false });
-    });
-  }, []);
-
-  const setupWebRTCHandlers = useCallback(() => {
-    // Set up ICE candidate emitter
-    webRTCService.setIceCandidateEmitter((candidate) => {
-      if (state.remoteUserId) {
-        socketService.sendIceCandidate(candidate, state.remoteUserId);
-      }
-    });
-
-    // Listen for call state changes
-    webRTCService.addListener((callState) => {
-      dispatch({ type: 'UPDATE_CALL_STATE', payload: callState });
-    });
-  }, [state.remoteUserId]);
-
-  // Call functions
-  const initiateCall = useCallback(async () => {
-    dispatch({ type: 'UPDATE_CALL_STATE', payload: { isCalling: true, isConnecting: true } });
-    socketService.initiateCall();
-  }, []);
-
-  const acceptCall = useCallback(async (callerId: string) => {
-    socketService.acceptCall(callerId);
-    dispatch({ type: 'SET_INCOMING_CALL', payload: null });
-  }, []);
-
-  const rejectCall = useCallback((callerId: string) => {
-    socketService.rejectCall(callerId);
-    dispatch({ type: 'SET_INCOMING_CALL', payload: null });
-  }, []);
-
-  const endCall = useCallback(() => {
-    socketService.endCall();
-    webRTCService.endCall();
-    dispatch({ type: 'CLEAR_SESSION' });
-  }, []);
-
-  const toggleMute = useCallback(() => {
-    return webRTCService.toggleMute();
-  }, []);
-
-  const toggleVideo = useCallback(() => {
-    return webRTCService.toggleVideo();
-  }, []);
-
-  const switchCamera = useCallback(() => {
-    webRTCService.switchCamera();
-  }, []);
-
-  // Annotation functions
-  const sendAnnotation = useCallback((annotation: Annotation) => {
-    annotationService.addAnnotation(annotation);
-    socketService.sendAnnotation(annotation);
-  }, []);
-
-  const clearAnnotations = useCallback(() => {
-    annotationService.clearAnnotations();
-    socketService.clearAnnotations();
-  }, []);
-
-  const freezeFrame = useCallback(() => {
-    const frame = annotationService.freezeFrame();
-    dispatch({ type: 'SET_FROZEN', payload: true });
-    socketService.freezeFrame('', frame.frameTimestamp);
-  }, []);
-
-  const resumeFrame = useCallback(() => {
-    annotationService.resumeFrame();
-    dispatch({ type: 'SET_FROZEN', payload: false });
-    socketService.resumeFrame();
+  // Clear error
+  const clearError = useCallback((): void => {
+    dispatch({ type: 'SET_ERROR', payload: null });
   }, []);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      locationService.stopTracking();
-      socketService.disconnect();
-      webRTCService.endCall();
+      if (webRTCService) {
+        webRTCService.cleanup();
+      }
+      if (signalingService) {
+        signalingService.disconnect();
+      }
     };
-  }, []);
+  }, [signalingService, webRTCService]);
 
-  const contextValue: AppContextType = {
+  const value: AppContextValue = {
     state,
-    dispatch,
-    initializeApp,
-    initiateCall,
+    signalingService,
+    webRTCService,
+    annotationService,
+    videoStabilizer,
+    localStream,
+    remoteStream,
+    initializeUser,
+    connectToServer,
+    startCall,
     acceptCall,
     rejectCall,
     endCall,
-    toggleMute,
-    toggleVideo,
-    switchCamera,
     sendAnnotation,
-    clearAnnotations,
-    freezeFrame,
-    resumeFrame,
+    freezeVideo,
+    resumeVideo,
+    clearError,
   };
 
-  return (
-    <AppContext.Provider value={contextValue}>
-      {children}
-    </AppContext.Provider>
-  );
-};
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
 
-// Custom hook
-export const useApp = (): AppContextType => {
+// Custom hook for using app context
+export function useApp(): AppContextValue {
   const context = useContext(AppContext);
   if (!context) {
     throw new Error('useApp must be used within an AppProvider');
   }
   return context;
-};
+}
 
 export default AppContext;

@@ -1,4 +1,9 @@
-export { HomeScreen } from './HomeScreen';
-export { UserScreen } from './UserScreen';
-export { ProfessionalScreen } from './ProfessionalScreen';
-export { CallScreen } from './CallScreen';
+// User screens
+export { UserSplashScreen } from './user/SplashScreen';
+export { UserHomeScreen } from './user/HomeScreen';
+export { UserVideoCallScreen } from './user/VideoCallScreen';
+
+// Professional screens
+export { ProfessionalSplashScreen } from './professional/SplashScreen';
+export { ProfessionalHomeScreen } from './professional/HomeScreen';
+export { ProfessionalVideoCallScreen } from './professional/VideoCallScreen';

@@ -1,65 +1,49 @@
-# Resolve react_native_pods.rb with node to allow for hoisting
-require Pod::Executable.execute_command('node', ['-p',
-  'require.resolve(
-    "react-native/scripts/react_native_pods.rb",
-    {paths: [process.argv[1]]},
-  )', __dir__]).strip
+# Require minimum iOS version for WebRTC support
+platform :ios, '13.0'
 
-platform :ios, min_ios_version_supported
+require_relative '../node_modules/react-native/scripts/react_native_pods'
+require_relative '../node_modules/@react-native-community/cli-platform-ios/native_modules'
+
 prepare_react_native_project!
 
-linkage = ENV['USE_FRAMEWORKS']
-if linkage != nil
-  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
-  use_frameworks! :linkage => linkage.to_sym
-end
-
-target 'Novaid' do
+target 'NovaidRemoteAssistance' do
   config = use_native_modules!
 
   use_react_native!(
-    :path => config[:reactNativePath],
+    :path => '../node_modules/react-native',
+    :hermes_enabled => true,
+    :fabric_enabled => false,
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
   # WebRTC
   pod 'react-native-webrtc', :path => '../node_modules/react-native-webrtc'
 
-  # Maps
-  pod 'react-native-maps', :path => '../node_modules/react-native-maps'
-  pod 'react-native-google-maps', :path => '../node_modules/react-native-maps'
-  pod 'GoogleMaps'
-  pod 'Google-Maps-iOS-Utils'
+  # Gesture Handler
+  pod 'RNGestureHandler', :path => '../node_modules/react-native-gesture-handler'
 
-  # Location
-  pod 'react-native-geolocation-service', :path => '../node_modules/react-native-geolocation-service'
+  # Reanimated
+  pod 'RNReanimated', :path => '../node_modules/react-native-reanimated'
 
-  # Permissions
-  pod 'RNPermissions', :path => '../node_modules/react-native-permissions'
+  # SVG
+  pod 'RNSVG', :path => '../node_modules/react-native-svg'
 
-  # Permissions handlers
-  permissions_path = '../node_modules/react-native-permissions/ios'
-  pod 'Permission-Camera', :path => "#{permissions_path}/Camera"
-  pod 'Permission-LocationAccuracy', :path => "#{permissions_path}/LocationAccuracy"
-  pod 'Permission-LocationAlways', :path => "#{permissions_path}/LocationAlways"
-  pod 'Permission-LocationWhenInUse', :path => "#{permissions_path}/LocationWhenInUse"
-  pod 'Permission-Microphone', :path => "#{permissions_path}/Microphone"
-
-  target 'NovaidTests' do
+  target 'NovaidRemoteAssistanceTests' do
     inherit! :complete
+    # Pods for testing
   end
 
   post_install do |installer|
     react_native_post_install(
       installer,
-      config[:reactNativePath],
+      '../node_modules/react-native',
       :mac_catalyst_enabled => false
     )
 
+    # Fix for Xcode 15
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
-        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-        config.build_settings['ENABLE_BITCODE'] = 'NO'
+        config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)', '_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION']
       end
     end
   end

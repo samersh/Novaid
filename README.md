@@ -1,209 +1,239 @@
-# Novaid - Remote Assistance Platform
+# Novaid Remote Assistance
 
-A cross-platform mobile application for real-time remote assistance using WebRTC, AR annotations, and GPS tracking.
+A cross-platform mobile application for real-time remote assistance with AR annotations. Built with React Native, WebRTC, and Socket.IO.
 
-## Features
+![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20Android-blue)
+![React Native](https://img.shields.io/badge/React%20Native-0.73.4-green)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-### User Features
-- **One-Click Calling**: Instantly connect with a professional with a single tap
-- **Unique User ID**: Auto-generated 6-character code for identification (no manual entry required)
-- **Rear Camera Streaming**: Broadcast your camera view to professionals
-- **Video Stabilization**: Software-based stabilization for clearer video
-- **GPS Location Sharing**: Automatic location transmission to professionals
-- **AR Annotation Display**: See professional's annotations overlaid on your screen
+## Overview
 
-### Professional Features
-- **Call Reception**: Receive and accept incoming calls from users
-- **Live Video Viewing**: See the user's stabilized camera feed in real-time
-- **GPS Map View**: Track user location on an integrated mini-map
-- **AR Annotation Tools**:
-  - Freehand drawing
-  - Arrows and lines
-  - Circles and rectangles
-  - Pointer/highlight tool
-  - Multiple colors and stroke widths
-- **Frame Freeze/Resume**: Pause video for precise annotations, then resume
-- **Annotation Clear**: Remove all annotations at once
+Novaid Remote Assistance enables professionals to provide real-time guidance to users through video calls with AR annotations. Users can share their rear camera view while professionals draw, point, and highlight directly on the video feed.
+
+### Key Features
+
+- **One-Click Calling**: Users can initiate calls with a single button tap
+- **Rear Camera Broadcasting**: High-quality video from device's rear camera
+- **Video Stabilization**: Built-in software stabilization for smoother video
+- **AR Annotations**: Real-time drawing, arrows, circles, pointers, and animations
+- **Freeze Frame**: Professionals can pause video to draw precise annotations
+- **WebRTC P2P**: Fast, low-latency peer-to-peer connections
+- **Unique User IDs**: Automatic user identification - no codes or session numbers needed
+
+## Application Flow
+
+### User Journey
+1. **Splash Screen** → Automatic initialization and server connection
+2. **Home Screen** → One-tap call button + demo mode option
+3. **Video Call** → Rear camera view with received AR annotations
+
+### Professional Journey
+1. **Splash Screen** → Automatic initialization and professional registration
+2. **Home Screen** → Wait for incoming calls with accept/reject options
+3. **Video Call** → View user's camera with full AR annotation tools
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Novaid App                            │
+├─────────────────────────────────────────────────────────────┤
+│  User App                    │    Professional App           │
+│  ┌──────────────┐           │    ┌──────────────┐           │
+│  │ Rear Camera  │           │    │ Video View   │           │
+│  │    +         │◄─────────►│    │    +         │           │
+│  │ AR Overlay   │  WebRTC   │    │ Drawing Tool │           │
+│  └──────────────┘   P2P     │    └──────────────┘           │
+├─────────────────────────────┴───────────────────────────────┤
+│                    Signaling Server                          │
+│              (Socket.IO / WebSocket)                         │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Technology Stack
 
-- **React Native** 0.73.4 - Cross-platform mobile development
-- **TypeScript** - Type-safe JavaScript
-- **WebRTC** - Real-time peer-to-peer video/audio communication
-- **Socket.IO** - Real-time bidirectional event-based communication
-- **React Navigation** - Native navigation for React Native
-- **React Native Maps** - Google Maps integration
+- **React Native 0.73.4** - Cross-platform mobile framework
+- **WebRTC** - Real-time peer-to-peer video communication
+- **Socket.IO** - WebSocket signaling for call coordination
+- **React Navigation** - Native navigation stack
 - **React Native SVG** - Vector graphics for annotations
 - **React Native Reanimated** - Smooth animations
+
+## Quick Start
+
+See [docs/QUICK_START.md](docs/QUICK_START.md) for a rapid setup guide.
+
+## Installation
+
+See [docs/INSTALLATION.md](docs/INSTALLATION.md) for detailed installation instructions.
 
 ## Project Structure
 
 ```
 novaid/
-├── App.tsx                    # Main application entry
-├── index.js                   # React Native entry point
 ├── src/
-│   ├── components/            # Reusable UI components
-│   │   ├── VideoStream.tsx    # WebRTC video player
-│   │   ├── AnnotationCanvas.tsx # AR drawing canvas
-│   │   ├── AnnotationToolbar.tsx # Drawing tools UI
-│   │   ├── CallControls.tsx   # Call control buttons
-│   │   └── LocationMap.tsx    # GPS map component
-│   ├── screens/               # App screens
-│   │   ├── HomeScreen.tsx     # Role selection
-│   │   ├── UserScreen.tsx     # User waiting/calling screen
-│   │   ├── ProfessionalScreen.tsx # Professional dashboard
-│   │   └── CallScreen.tsx     # Active call interface
-│   ├── services/              # Core services
-│   │   ├── WebRTCService.ts   # WebRTC connection handling
-│   │   ├── SocketService.ts   # Socket.IO communication
-│   │   ├── LocationService.ts # GPS tracking
-│   │   ├── AnnotationService.ts # Annotation management
-│   │   └── UserService.ts     # User ID management
-│   ├── utils/                 # Utility functions
-│   │   └── VideoStabilizer.ts # Video stabilization algorithm
-│   ├── context/               # React Context
-│   │   └── AppContext.tsx     # Global state management
-│   └── types/                 # TypeScript definitions
-│       └── index.ts           # Type definitions
-├── server/                    # Signaling server
-│   ├── index.js               # Express + Socket.IO server
-│   └── package.json           # Server dependencies
-├── ios/                       # iOS native code
-│   ├── Podfile                # CocoaPods dependencies
-│   └── Novaid/                # iOS app files
-├── android/                   # Android native code
-│   └── app/                   # Android app files
-└── package.json               # Project dependencies
+│   ├── components/          # Reusable UI components
+│   │   ├── AnnotationOverlay.tsx
+│   │   ├── DrawingCanvas.tsx
+│   │   └── VideoView.tsx
+│   ├── context/             # React Context providers
+│   │   └── AppContext.tsx
+│   ├── navigation/          # Navigation configuration
+│   │   └── AppNavigator.tsx
+│   ├── screens/             # Screen components
+│   │   ├── user/            # User role screens
+│   │   └── professional/    # Professional role screens
+│   ├── services/            # Core business logic
+│   │   ├── AnnotationService.ts
+│   │   ├── SignalingService.ts
+│   │   ├── UserIdService.ts
+│   │   ├── VideoStabilizer.ts
+│   │   └── WebRTCService.ts
+│   ├── types/               # TypeScript type definitions
+│   └── utils/               # Utility functions
+├── server/                  # Signaling server
+├── __tests__/               # Test files
+├── android/                 # Android native code
+├── ios/                     # iOS native code
+└── docs/                    # Documentation
 ```
 
-## Prerequisites
+## Core Services
 
-- Node.js >= 18
-- npm or yarn
-- Xcode 15+ (for iOS)
+### WebRTC Service
+Manages peer-to-peer video connections using WebRTC. Handles ICE candidates, offer/answer exchange, and media streams.
+
+### Video Stabilizer
+Software-based video stabilization using Kalman filtering and motion smoothing. Processes accelerometer data to compensate for camera shake.
+
+### Annotation Service
+Manages AR annotations including:
+- **Drawing**: Freehand paths
+- **Arrows**: Direction indicators
+- **Circles**: Area highlights
+- **Pointers**: Animated attention markers
+- **Text**: Labels and instructions
+- **Animations**: Pulse, bounce, highlight effects
+
+### Signaling Service
+Socket.IO-based signaling for WebRTC connection establishment and call coordination.
+
+## Running Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run with coverage
+npm run test:coverage
+
+# Run specific test file
+npm test -- VideoStabilizer
+```
+
+## Development
+
+### Prerequisites
+- Node.js 18+
+- React Native CLI
+- Xcode (for iOS)
 - Android Studio (for Android)
-- CocoaPods (for iOS)
-- Google Maps API Key
 
-## Installation
+### Running the Signaling Server
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd novaid
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Install iOS dependencies**
-   ```bash
-   cd ios && pod install && cd ..
-   ```
-
-4. **Configure Google Maps API**
-
-   iOS: Replace `YOUR_GOOGLE_MAPS_API_KEY` in `ios/Novaid/AppDelegate.mm`
-
-   Android: Replace `YOUR_GOOGLE_MAPS_API_KEY` in `android/app/src/main/AndroidManifest.xml`
-
-## Running the App
-
-### Start the Signaling Server
 ```bash
 cd server
 npm install
 npm start
 ```
 
-The server runs on port 3000 by default.
+Server runs on `http://localhost:3001` by default.
 
-### iOS
+### Running the Mobile App
+
 ```bash
+# Install dependencies
+npm install
+
+# iOS
 npm run ios
-```
 
-### Android
-```bash
+# Android
 npm run android
 ```
 
 ## Configuration
 
-### Server URL
-Update the server URL in `src/services/SocketService.ts`:
+### Signaling Server URL
+Update the server URL in `src/services/SignalingService.ts`:
+
 ```typescript
-constructor(serverUrl: string = 'http://your-server-ip:3000') {
+const DEFAULT_SERVER_URL = 'wss://your-server.com';
 ```
 
-### STUN/TURN Servers
-Configure ICE servers in `src/services/WebRTCService.ts` for production:
+### Video Stabilization
+Adjust stabilization parameters in `src/services/VideoStabilizer.ts`:
+
 ```typescript
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:your-stun-server.com:19302' },
-    {
-      urls: 'turn:your-turn-server.com:443',
-      username: 'username',
-      credential: 'password',
-    },
-  ],
+const config = {
+  enabled: true,
+  smoothingFactor: 0.95,  // Higher = smoother but more lag
+  maxOffset: 50,          // Maximum pixel compensation
 };
 ```
 
-## Architecture
+## API Reference
 
-### WebRTC Flow
-1. User initiates call via Socket.IO to signaling server
-2. Server assigns an available professional
-3. Professional accepts, triggering WebRTC offer/answer exchange
-4. ICE candidates are exchanged for NAT traversal
-5. Direct peer-to-peer connection established for video/audio
+### WebRTC Service
 
-### Annotation Flow
-1. Professional draws on canvas overlay
-2. Annotations serialized and sent via Socket.IO
-3. User receives and renders annotations on their screen
-4. Frame freeze pauses video, allowing precise annotation
-5. Resume sends annotations to be placed in video context
+```typescript
+// Initialize local camera stream
+await webrtc.initializeLocalStream(useRearCamera);
 
-### Location Flow
-1. User's device tracks GPS using high-accuracy mode
-2. Location updates sent via Socket.IO
-3. Professional sees real-time position on mini-map
+// Start a call
+await webrtc.initiateCall(targetUserId);
 
-## Permissions Required
+// Accept incoming call
+await webrtc.acceptCall(callerId);
 
-### iOS
-- Camera
-- Microphone
-- Location (When In Use & Always)
-- Background Modes: audio, voip, location
+// Send annotation
+webrtc.sendAnnotation(annotation);
 
-### Android
-- CAMERA
-- RECORD_AUDIO
-- ACCESS_FINE_LOCATION
-- ACCESS_COARSE_LOCATION
-- ACCESS_BACKGROUND_LOCATION
-- INTERNET
-- BLUETOOTH
+// Freeze/resume video
+webrtc.freezeVideo();
+webrtc.resumeVideo(annotations);
+```
+
+### Annotation Service
+
+```typescript
+// Drawing
+annotation.startDrawing(point, color, strokeWidth);
+annotation.addDrawingPoint(point);
+annotation.endDrawing();
+
+// Quick annotations
+annotation.createPointer(point, color);
+annotation.createArrow(start, end);
+annotation.createCircle(center, radius);
+annotation.createText(position, text);
+annotation.createAnimation(point, 'pulse');
+```
 
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
-MIT License - see LICENSE file for details
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Support
+## Acknowledgments
 
-For issues and feature requests, please use the GitHub issue tracker.
+- [WebRTC](https://webrtc.org/) for real-time communication
+- [React Native](https://reactnative.dev/) for cross-platform development
+- [Socket.IO](https://socket.io/) for real-time signaling

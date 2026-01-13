@@ -1,5 +1,3 @@
-export { VideoStream, PictureInPicture } from './VideoStream';
-export { AnnotationCanvas, AnimatedPointer } from './AnnotationCanvas';
-export { AnnotationToolbar, FloatingAnnotationToolbar } from './AnnotationToolbar';
-export { CallControls, CallButton, IncomingCall } from './CallControls';
-export { LocationMap, MiniMap } from './LocationMap';
+export { AnnotationOverlay } from './AnnotationOverlay';
+export { DrawingCanvas } from './DrawingCanvas';
+export { VideoView } from './VideoView';
