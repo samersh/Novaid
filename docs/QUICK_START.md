@@ -1,116 +1,196 @@
-# Novaid Quick Start Guide
+# Quick Start Guide
 
-For experienced developers who just need the commands.
+Get Novaid Remote Assistance running in under 10 minutes.
 
-## Prerequisites
-
-- Node.js 18+
-- Xcode 15+ (for iOS)
-- Android Studio (for Android)
-- CocoaPods (for iOS)
-
-## Setup
+## Prerequisites Check
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/Novaid.git
-cd Novaid
+# Verify Node.js (18+)
+node --version
 
-# Install dependencies
-npm install
+# Verify npm (9+)
+npm --version
 
-# iOS only: Install pods
-cd ios && pod install && cd ..
+# Verify React Native CLI
+npx react-native --version
 ```
 
-## Configure API Keys
+## 5-Minute Setup
 
-1. **Google Maps iOS:** Edit `ios/Novaid/AppDelegate.mm`
-   ```objc
-   [GMSServices provideAPIKey:@"YOUR_API_KEY"];
-   ```
-
-2. **Google Maps Android:** Edit `android/app/src/main/AndroidManifest.xml`
-   ```xml
-   android:value="YOUR_API_KEY"
-   ```
-
-3. **Server URL:** Edit `src/services/SocketService.ts`
-   ```typescript
-   constructor(serverUrl: string = 'http://YOUR_IP:3000') {
-   ```
-
-## Run
+### Step 1: Install Dependencies
 
 ```bash
-# Terminal 1: Start server
-cd server && npm install && npm start
+cd Novaid
+npm install
+```
 
-# Terminal 2: Run iOS
+### Step 2: Start the Signaling Server
+
+```bash
+# Open a new terminal
+cd server
+npm install
+npm start
+```
+
+You should see:
+```
+Novaid Signaling Server running on port 3001
+```
+
+### Step 3: Run the App
+
+**For iOS (Mac only):**
+```bash
+cd ios && pod install && cd ..
 npm run ios
+```
 
-# OR Terminal 2: Run Android
+**For Android:**
+```bash
 npm run android
 ```
 
-## Build for Release
+### Step 4: Test the App
 
-### iOS
-```bash
-cd ios
-xcodebuild -workspace Novaid.xcworkspace -scheme Novaid -configuration Release -archivePath build/Novaid.xcarchive archive
+1. Run the app on **two devices** (or simulators)
+2. On Device 1: Select **"User"** role
+3. On Device 2: Select **"Professional"** role
+4. On Device 1: Tap **"Start Call"**
+5. On Device 2: Tap **"Accept"** when call appears
+6. You're now in a video call with AR annotation support!
+
+---
+
+## Quick Demo Mode
+
+Don't have two devices? Use Demo Mode:
+
+1. Launch the app
+2. Select "User"
+3. Tap "Try Demo"
+4. Explore the video call interface
+
+---
+
+## Key Features to Try
+
+### As a User
+- **One-tap calling**: Just press the call button
+- **Rear camera view**: Your view is shared with the professional
+- **Receive annotations**: See drawings appear on your screen
+
+### As a Professional
+- **Accept calls**: Incoming calls show with user ID
+- **Draw annotations**: Tap the pencil icon to draw
+- **Freeze video**: Pause the video for precise annotations
+- **Multiple tools**: Pen, arrow, circle, pointer
+
+---
+
+## Annotation Tools
+
+| Tool | Icon | Usage |
+|------|------|-------|
+| Pen | ✏️ | Freehand drawing |
+| Arrow | ➡️ | Direction indicators |
+| Circle | ⭕ | Highlight areas |
+| Pointer | 👆 | Animated attention marker |
+
+**Color Palette**: Red, Green, Blue, Yellow, Magenta, Cyan, White
+
+---
+
+## Project Structure Overview
+
+```
+src/
+├── screens/           # App screens
+│   ├── user/         # User role: Splash, Home, VideoCall
+│   └── professional/ # Professional role: Splash, Home, VideoCall
+├── services/         # Core logic
+│   ├── WebRTCService.ts       # Video calling
+│   ├── AnnotationService.ts   # AR annotations
+│   └── VideoStabilizer.ts     # Camera stabilization
+└── components/       # UI components
+    ├── VideoView.tsx          # Video display
+    ├── AnnotationOverlay.tsx  # Annotation layer
+    └── DrawingCanvas.tsx      # Drawing interface
 ```
 
-### Android
-```bash
-cd android
-./gradlew assembleRelease
-# APK at: android/app/build/outputs/apk/release/app-release.apk
-```
+---
 
-## Useful Commands
+## Common Commands
 
 ```bash
-# Clear cache
-npm start -- --reset-cache
+# Start development server
+npm start
 
-# Clean iOS
-cd ios && xcodebuild clean && pod install && cd ..
+# Run on iOS
+npm run ios
 
-# Clean Android
-cd android && ./gradlew clean && cd ..
+# Run on Android
+npm run android
 
-# List simulators
-xcrun simctl list devices
+# Run tests
+npm test
 
-# Check Android devices
-adb devices
+# Type check
+npm run typecheck
 
-# Run on specific iOS simulator
-npm run ios -- --simulator="iPhone 15 Pro"
-
-# Run on specific Android device
-npm run android -- --deviceId=DEVICE_ID
+# Start signaling server
+cd server && npm start
 ```
 
-## Troubleshooting
+---
 
-| Issue | Solution |
-|-------|----------|
-| Pod install fails | `sudo gem install cocoapods && pod repo update` |
-| Android SDK not found | Create `android/local.properties` with `sdk.dir=/path/to/sdk` |
-| Port 3000 in use | `lsof -i :3000` then `kill -9 PID` |
+## Configuration Options
+
+### Change Server URL
+
+Edit `src/services/SignalingService.ts`:
+
+```typescript
+const DEFAULT_SERVER_URL = 'wss://your-server.com';
+```
+
+### Adjust Video Stabilization
+
+Edit `src/services/VideoStabilizer.ts`:
+
+```typescript
+// More smoothing (reduces shake but adds lag)
+smoothingFactor: 0.98
+
+// Less smoothing (more responsive but shakier)
+smoothingFactor: 0.85
+```
+
+---
+
+## Troubleshooting Quick Fixes
+
+| Problem | Solution |
+|---------|----------|
 | Metro bundler stuck | `npm start -- --reset-cache` |
-| iOS signing error | Open in Xcode, set team in Signing & Capabilities |
+| iOS pods issue | `cd ios && pod install --repo-update` |
+| Android build fail | `cd android && ./gradlew clean` |
+| No connection | Check signaling server is running |
 
-## Testing Checklist
+---
 
-- [ ] Server running and accessible
-- [ ] User can see their unique ID
-- [ ] User can initiate call
-- [ ] Professional receives incoming call
-- [ ] Video streaming works both ways
-- [ ] AR annotations appear on user's screen
-- [ ] Location shows on professional's map
-- [ ] Frame freeze/resume works
-- [ ] Call can be ended properly
+## Next Steps
+
+- Read the full [Installation Guide](INSTALLATION.md) for detailed setup
+- Explore the [README](../README.md) for architecture details
+- Check `/server/index.js` for signaling server customization
+- Review `/src/services/` for service customization
+
+---
+
+## Support
+
+- GitHub Issues: Report bugs or request features
+- Documentation: Check `/docs` for detailed guides
+
+Happy coding! 🚀

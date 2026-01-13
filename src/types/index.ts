@@ -1,33 +1,46 @@
-// User and Session Types
+// User types
+export type UserRole = 'user' | 'professional';
+
 export interface User {
   id: string;
-  uniqueCode: string;
-  role: 'user' | 'professional';
-  createdAt: Date;
+  role: UserRole;
+  name?: string;
+  createdAt: number;
 }
 
-export interface Session {
-  id: string;
-  userId: string;
-  professionalId: string | null;
-  status: 'pending' | 'active' | 'ended';
-  startTime: Date;
-  endTime?: Date;
-}
+// Call states
+export type CallState =
+  | 'idle'
+  | 'calling'
+  | 'receiving'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'failed';
 
-// Location Types
-export interface GPSLocation {
-  latitude: number;
-  longitude: number;
-  altitude?: number;
-  accuracy?: number;
-  heading?: number;
-  speed?: number;
+// Signaling message types
+export type SignalType =
+  | 'offer'
+  | 'answer'
+  | 'ice-candidate'
+  | 'call-request'
+  | 'call-accepted'
+  | 'call-rejected'
+  | 'call-ended'
+  | 'annotation'
+  | 'freeze-video'
+  | 'resume-video';
+
+export interface SignalMessage {
+  type: SignalType;
+  from: string;
+  to: string;
+  payload?: any;
   timestamp: number;
 }
 
-// Annotation Types
-export type AnnotationType = 'line' | 'arrow' | 'circle' | 'rectangle' | 'freehand' | 'text' | 'pointer';
+// Annotation types
+export type AnnotationType = 'drawing' | 'pointer' | 'arrow' | 'circle' | 'text' | 'animation';
 
 export interface Point {
   x: number;
@@ -41,117 +54,61 @@ export interface Annotation {
   color: string;
   strokeWidth: number;
   text?: string;
+  animationType?: 'pulse' | 'bounce' | 'highlight';
   timestamp: number;
-  duration?: number; // For animated annotations
+  isComplete: boolean;
 }
 
-export interface AnnotationFrame {
-  id: string;
-  frameTimestamp: number;
-  annotations: Annotation[];
-  isFrozen: boolean;
-}
-
-// WebRTC Types
-export interface RTCSignal {
-  type: 'offer' | 'answer' | 'ice-candidate';
-  payload: RTCSessionDescriptionInit | RTCIceCandidateInit;
-  from: string;
-  to: string;
-}
-
-export interface CallState {
-  isConnected: boolean;
-  isConnecting: boolean;
-  isCalling: boolean;
-  isReceiving: boolean;
-  localStream: MediaStream | null;
-  remoteStream: MediaStream | null;
-  error: string | null;
-}
-
-// Video Stabilization Types
+// Video stabilization config
 export interface StabilizationConfig {
   enabled: boolean;
   smoothingFactor: number;
-  maxCorrection: number;
+  maxOffset: number;
 }
 
-export interface FrameTransform {
-  translateX: number;
-  translateY: number;
-  rotation: number;
-  scale: number;
+// WebRTC configuration
+export interface WebRTCConfig {
+  iceServers: RTCIceServer[];
+  videoConstraints: MediaTrackConstraints;
+  audioConstraints: MediaTrackConstraints;
 }
 
-// Socket Events
-export type SocketEvent =
-  | 'connect'
-  | 'disconnect'
-  | 'call:initiate'
-  | 'call:accept'
-  | 'call:reject'
-  | 'call:end'
-  | 'signal:offer'
-  | 'signal:answer'
-  | 'signal:ice'
-  | 'location:update'
-  | 'annotation:add'
-  | 'annotation:clear'
-  | 'frame:freeze'
-  | 'frame:resume'
-  | 'user:register'
-  | 'user:available'
-  | 'error';
+// Call session
+export interface CallSession {
+  id: string;
+  userId: string;
+  professionalId?: string;
+  state: CallState;
+  startTime?: number;
+  endTime?: number;
+  annotations: Annotation[];
+  isVideoFrozen: boolean;
+  frozenFrameData?: string;
+}
 
-// Navigation Types
-export type RootStackParamList = {
-  Home: undefined;
-  UserScreen: undefined;
-  ProfessionalScreen: undefined;
-  CallScreen: {
-    role: 'user' | 'professional';
-    sessionId?: string;
-  };
-  Settings: undefined;
+// App state
+export interface AppState {
+  user: User | null;
+  currentSession: CallSession | null;
+  isConnectedToServer: boolean;
+  error: string | null;
+}
+
+// Navigation types
+export type UserStackParamList = {
+  UserSplash: undefined;
+  UserHome: undefined;
+  UserVideoCall: { sessionId: string };
 };
 
-// Component Props Types
-export interface VideoStreamProps {
-  stream: MediaStream | null;
-  muted?: boolean;
-  mirror?: boolean;
-  stabilized?: boolean;
-}
+export type ProfessionalStackParamList = {
+  ProfessionalSplash: undefined;
+  ProfessionalHome: undefined;
+  ProfessionalVideoCall: { sessionId: string };
+};
 
-export interface AnnotationCanvasProps {
-  annotations: Annotation[];
-  isDrawing: boolean;
-  currentTool: AnnotationType;
-  currentColor: string;
-  strokeWidth: number;
-  onAnnotationAdd: (annotation: Annotation) => void;
-  isFrozen: boolean;
-}
-
-export interface MapViewProps {
-  location: GPSLocation | null;
-  showUserMarker: boolean;
-}
-
-// API Response Types
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
-
-export interface RegisterResponse {
-  userId: string;
-  uniqueCode: string;
-}
-
-export interface CallResponse {
-  sessionId: string;
-  status: string;
-}
+export type RootStackParamList = {
+  RoleSelection: undefined;
+  UserStack: undefined;
+  ProfessionalStack: undefined;
+};

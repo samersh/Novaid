@@ -1,391 +1,386 @@
+/**
+ * Novaid Signaling Server
+ *
+ * WebRTC signaling server for establishing peer-to-peer connections
+ * between users and professionals for remote assistance.
+ */
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-
 const server = http.createServer(app);
+
+// Configure CORS
+app.use(cors());
+
+// Socket.IO configuration
 const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
   },
+  transports: ['websocket', 'polling'],
 });
 
-// In-memory storage for users and sessions
-const users = new Map(); // Map<socketId, { id, code, role, isAvailable }>
-const usersByCode = new Map(); // Map<code, socketId>
-const usersById = new Map(); // Map<userId, socketId>
-const sessions = new Map(); // Map<sessionId, { userId, professionalId, status }>
-const availableProfessionals = new Set(); // Set of professional socket IDs
+// Data stores
+const connectedUsers = new Map(); // userId -> socketId
+const connectedProfessionals = new Map(); // professionalId -> socketId
+const activeCalls = new Map(); // callId -> { userId, professionalId, status }
+const waitingUsers = []; // Queue of users waiting for a professional
 
-// Generate unique session ID
-function generateSessionId() {
-  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+// Utility functions
+function getSocketById(socketId) {
+  return io.sockets.sockets.get(socketId);
 }
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', connections: users.size });
-});
-
-// Get available professionals count
-app.get('/api/professionals/available', (req, res) => {
-  res.json({ count: availableProfessionals.size });
-});
-
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
-  const { userId, role } = socket.handshake.auth;
-
-  // Register user
-  socket.on('user:register', (data) => {
-    const { userId: uid, role: userRole } = data;
-    const userCode = generateUserCode();
-
-    const userData = {
-      id: uid,
-      code: userCode,
-      role: userRole,
-      isAvailable: true,
-      socketId: socket.id,
-    };
-
-    users.set(socket.id, userData);
-    usersByCode.set(userCode, socket.id);
-    usersById.set(uid, socket.id);
-
-    if (userRole === 'professional') {
-      availableProfessionals.add(socket.id);
+function findAvailableProfessional() {
+  // Find a professional who is not in an active call
+  for (const [professionalId, socketId] of connectedProfessionals) {
+    const isInCall = Array.from(activeCalls.values()).some(
+      (call) => call.professionalId === professionalId && call.status === 'active'
+    );
+    if (!isInCall) {
+      return { professionalId, socketId };
     }
+  }
+  return null;
+}
 
-    socket.emit('user:registered', { uniqueCode: userCode });
-    console.log(`User registered: ${uid} (${userRole}) with code ${userCode}`);
+// Express routes
+app.get('/', (req, res) => {
+  res.json({
+    status: 'running',
+    service: 'Novaid Signaling Server',
+    version: '1.0.0',
+    connections: {
+      users: connectedUsers.size,
+      professionals: connectedProfessionals.size,
+      activeCalls: activeCalls.size,
+    },
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy' });
+});
+
+// Socket.IO event handlers
+io.on('connection', (socket) => {
+  const userId = socket.handshake.query.userId;
+  console.log(`Client connected: ${socket.id} (userId: ${userId})`);
+
+  // Store socket mapping
+  if (userId) {
+    connectedUsers.set(userId, socket.id);
+  }
+
+  // Register as professional
+  socket.on('register-professional', (data) => {
+    const { userId: professionalId } = data;
+    connectedProfessionals.set(professionalId, socket.id);
+    console.log(`Professional registered: ${professionalId}`);
+
+    // Notify any waiting users
+    processWaitingUsers();
   });
 
-  // Initiate call (from user)
-  socket.on('call:initiate', (data) => {
-    const { callerId, targetCode } = data;
-    const caller = users.get(socket.id);
+  // User requests a call
+  socket.on('request-call', (data) => {
+    const { userId: callerId } = data;
+    console.log(`Call requested by user: ${callerId}`);
 
-    if (!caller) {
-      socket.emit('error', { message: 'User not registered' });
-      return;
+    const available = findAvailableProfessional();
+
+    if (available) {
+      const { professionalId, socketId: professionalSocketId } = available;
+
+      // Create call session
+      const callId = uuidv4();
+      activeCalls.set(callId, {
+        userId: callerId,
+        professionalId,
+        status: 'pending',
+        createdAt: Date.now(),
+      });
+
+      // Notify professional of incoming call
+      const professionalSocket = getSocketById(professionalSocketId);
+      if (professionalSocket) {
+        professionalSocket.emit('call-request', {
+          type: 'call-request',
+          from: callerId,
+          to: professionalId,
+          callId,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Notify user that call is being connected
+      socket.emit('professional-available', {
+        professionalId,
+        callId,
+      });
+    } else {
+      // Add to waiting queue
+      if (!waitingUsers.includes(callerId)) {
+        waitingUsers.push(callerId);
+      }
+      socket.emit('no-professional-available');
+    }
+  });
+
+  // Professional accepts call
+  socket.on('accept-call', (data) => {
+    const { userId: professionalId, callerId } = data;
+    console.log(`Call accepted: ${professionalId} -> ${callerId}`);
+
+    // Find and update call
+    for (const [callId, call] of activeCalls) {
+      if (call.userId === callerId && call.professionalId === professionalId) {
+        call.status = 'active';
+
+        // Notify user
+        const userSocketId = connectedUsers.get(callerId);
+        const userSocket = getSocketById(userSocketId);
+        if (userSocket) {
+          userSocket.emit('call-accepted', {
+            type: 'call-accepted',
+            from: professionalId,
+            to: callerId,
+            callId,
+            timestamp: Date.now(),
+          });
+        }
+        break;
+      }
+    }
+  });
+
+  // Professional rejects call
+  socket.on('reject-call', (data) => {
+    const { userId: professionalId, callerId } = data;
+    console.log(`Call rejected: ${professionalId} -> ${callerId}`);
+
+    // Remove call from active calls
+    for (const [callId, call] of activeCalls) {
+      if (call.userId === callerId && call.professionalId === professionalId) {
+        activeCalls.delete(callId);
+        break;
+      }
     }
 
-    // Find an available professional
-    let professionalSocketId = null;
+    // Notify user
+    const userSocketId = connectedUsers.get(callerId);
+    const userSocket = getSocketById(userSocketId);
+    if (userSocket) {
+      userSocket.emit('call-rejected', {
+        type: 'call-rejected',
+        from: professionalId,
+        to: callerId,
+        timestamp: Date.now(),
+      });
+    }
 
-    if (targetCode) {
-      // Target specific professional by code
-      professionalSocketId = usersByCode.get(targetCode);
-    } else {
-      // Find any available professional
-      for (const profId of availableProfessionals) {
-        const prof = users.get(profId);
-        if (prof && prof.isAvailable) {
-          professionalSocketId = profId;
+    // Try to find another professional
+    const available = findAvailableProfessional();
+    if (available) {
+      const { professionalId: newProfId, socketId: professionalSocketId } = available;
+
+      const callId = uuidv4();
+      activeCalls.set(callId, {
+        userId: callerId,
+        professionalId: newProfId,
+        status: 'pending',
+        createdAt: Date.now(),
+      });
+
+      const professionalSocket = getSocketById(professionalSocketId);
+      if (professionalSocket) {
+        professionalSocket.emit('call-request', {
+          type: 'call-request',
+          from: callerId,
+          to: newProfId,
+          callId,
+          timestamp: Date.now(),
+        });
+      }
+    }
+  });
+
+  // Generic message handler (for WebRTC signaling)
+  socket.on('message', (message) => {
+    const { to, type } = message;
+    console.log(`Message ${type} from ${message.from} to ${to}`);
+
+    // Find recipient socket
+    let recipientSocketId = connectedUsers.get(to) || connectedProfessionals.get(to);
+
+    // Fallback: check both maps
+    if (!recipientSocketId) {
+      for (const [id, socketId] of connectedUsers) {
+        if (id === to) {
+          recipientSocketId = socketId;
+          break;
+        }
+      }
+    }
+    if (!recipientSocketId) {
+      for (const [id, socketId] of connectedProfessionals) {
+        if (id === to) {
+          recipientSocketId = socketId;
           break;
         }
       }
     }
 
-    if (!professionalSocketId) {
-      socket.emit('call:rejected', { reason: 'No professionals available' });
-      return;
-    }
-
-    const professional = users.get(professionalSocketId);
-
-    // Notify professional of incoming call
-    io.to(professionalSocketId).emit('call:incoming', {
-      callerId: caller.id,
-      callerCode: caller.code,
-      callerSocketId: socket.id,
-    });
-
-    console.log(`Call initiated from ${caller.code} to professional ${professional.code}`);
-  });
-
-  // Accept call (from professional)
-  socket.on('call:accept', (data) => {
-    const { callerId, professionalId } = data;
-    const professional = users.get(socket.id);
-    const callerSocketId = usersById.get(callerId);
-
-    if (!professional || !callerSocketId) {
-      socket.emit('error', { message: 'Invalid call acceptance' });
-      return;
-    }
-
-    // Create session
-    const sessionId = generateSessionId();
-    sessions.set(sessionId, {
-      userId: callerId,
-      professionalId: professional.id,
-      status: 'active',
-      startTime: Date.now(),
-    });
-
-    // Mark professional as unavailable
-    professional.isAvailable = false;
-    availableProfessionals.delete(socket.id);
-
-    // Notify caller that call was accepted
-    io.to(callerSocketId).emit('call:accepted', {
-      sessionId,
-      professionalId: professional.id,
-      professionalSocketId: socket.id,
-    });
-
-    // Also notify professional
-    socket.emit('call:accepted', {
-      sessionId,
-      userId: callerId,
-      userSocketId: callerSocketId,
-    });
-
-    console.log(`Call accepted. Session: ${sessionId}`);
-  });
-
-  // Reject call (from professional)
-  socket.on('call:reject', (data) => {
-    const { callerId, reason } = data;
-    const callerSocketId = usersById.get(callerId);
-
-    if (callerSocketId) {
-      io.to(callerSocketId).emit('call:rejected', { reason });
-    }
-
-    console.log(`Call rejected: ${reason}`);
-  });
-
-  // End call
-  socket.on('call:end', (data) => {
-    const { userId: uid } = data;
-    const user = users.get(socket.id);
-
-    if (!user) return;
-
-    // Find and end the session
-    for (const [sessionId, session] of sessions) {
-      if (session.userId === uid || session.professionalId === uid) {
-        session.status = 'ended';
-        session.endTime = Date.now();
-
-        // Notify both parties
-        const userSocketId = usersById.get(session.userId);
-        const profSocketId = usersById.get(session.professionalId);
-
-        if (userSocketId) io.to(userSocketId).emit('call:ended');
-        if (profSocketId) {
-          io.to(profSocketId).emit('call:ended');
-          // Mark professional as available again
-          const prof = users.get(profSocketId);
-          if (prof) {
-            prof.isAvailable = true;
-            availableProfessionals.add(profSocketId);
-          }
-        }
-
-        sessions.delete(sessionId);
-        console.log(`Call ended. Session: ${sessionId}`);
-        break;
+    if (recipientSocketId) {
+      const recipientSocket = getSocketById(recipientSocketId);
+      if (recipientSocket) {
+        recipientSocket.emit('message', message);
       }
+    } else {
+      console.log(`Recipient not found: ${to}`);
     }
   });
 
-  // WebRTC signaling - Offer
-  socket.on('signal:offer', (data) => {
-    const { offer, from, to } = data;
-    const targetSocketId = usersById.get(to);
-
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('signal:offer', { offer, from });
-      console.log(`Offer relayed from ${from} to ${to}`);
-    }
-  });
-
-  // WebRTC signaling - Answer
-  socket.on('signal:answer', (data) => {
-    const { answer, from, to } = data;
-    const targetSocketId = usersById.get(to);
-
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('signal:answer', { answer, from });
-      console.log(`Answer relayed from ${from} to ${to}`);
-    }
-  });
-
-  // WebRTC signaling - ICE Candidate
-  socket.on('signal:ice', (data) => {
-    const { candidate, from, to } = data;
-    const targetSocketId = usersById.get(to);
-
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('signal:ice', { candidate, from });
-    }
-  });
-
-  // Location update
-  socket.on('location:update', (data) => {
-    const { userId: uid, location } = data;
-
-    // Find the session and relay to the other party
-    for (const [sessionId, session] of sessions) {
-      if (session.status !== 'active') continue;
-
-      let targetUserId = null;
-      if (session.userId === uid) {
-        targetUserId = session.professionalId;
-      } else if (session.professionalId === uid) {
-        targetUserId = session.userId;
-      }
-
-      if (targetUserId) {
-        const targetSocketId = usersById.get(targetUserId);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit('location:update', { location });
-        }
-        break;
-      }
-    }
-  });
-
-  // Annotation
-  socket.on('annotation:add', (data) => {
-    const { userId: uid, annotation } = data;
-
-    // Find session and relay annotation
-    for (const [sessionId, session] of sessions) {
-      if (session.status !== 'active') continue;
-
-      let targetUserId = null;
-      if (session.userId === uid) {
-        targetUserId = session.professionalId;
-      } else if (session.professionalId === uid) {
-        targetUserId = session.userId;
-      }
-
-      if (targetUserId) {
-        const targetSocketId = usersById.get(targetUserId);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit('annotation:received', { annotation });
-        }
-        break;
-      }
-    }
-  });
-
-  // Clear annotations
-  socket.on('annotation:clear', (data) => {
-    const { userId: uid } = data;
-
-    for (const [sessionId, session] of sessions) {
-      if (session.status !== 'active') continue;
-
-      let targetUserId = null;
-      if (session.userId === uid) {
-        targetUserId = session.professionalId;
-      } else if (session.professionalId === uid) {
-        targetUserId = session.userId;
-      }
-
-      if (targetUserId) {
-        const targetSocketId = usersById.get(targetUserId);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit('annotation:clear');
-        }
-        break;
-      }
-    }
-  });
-
-  // Freeze frame
-  socket.on('frame:freeze', (data) => {
-    const { userId: uid, frameData, timestamp } = data;
-
-    for (const [sessionId, session] of sessions) {
-      if (session.status !== 'active') continue;
-
-      if (session.professionalId === uid) {
-        const userSocketId = usersById.get(session.userId);
-        if (userSocketId) {
-          io.to(userSocketId).emit('frame:frozen', { frameData, timestamp });
-        }
-        break;
-      }
-    }
-  });
-
-  // Resume frame
-  socket.on('frame:resume', (data) => {
-    const { userId: uid } = data;
-
-    for (const [sessionId, session] of sessions) {
-      if (session.status !== 'active') continue;
-
-      if (session.professionalId === uid) {
-        const userSocketId = usersById.get(session.userId);
-        if (userSocketId) {
-          io.to(userSocketId).emit('frame:resumed');
-        }
-        break;
-      }
-    }
-  });
-
-  // Handle disconnect
+  // Handle disconnection
   socket.on('disconnect', () => {
-    const user = users.get(socket.id);
+    console.log(`Client disconnected: ${socket.id}`);
 
-    if (user) {
-      console.log(`Client disconnected: ${user.id} (${user.role})`);
+    // Clean up user
+    for (const [id, socketId] of connectedUsers) {
+      if (socketId === socket.id) {
+        connectedUsers.delete(id);
 
-      // Clean up
-      usersByCode.delete(user.code);
-      usersById.delete(user.id);
-      availableProfessionals.delete(socket.id);
-
-      // End any active sessions
-      for (const [sessionId, session] of sessions) {
-        if (session.userId === user.id || session.professionalId === user.id) {
-          session.status = 'ended';
-
-          const otherUserId = session.userId === user.id ? session.professionalId : session.userId;
-          const otherSocketId = usersById.get(otherUserId);
-
-          if (otherSocketId) {
-            io.to(otherSocketId).emit('call:ended');
+        // End any active calls for this user
+        for (const [callId, call] of activeCalls) {
+          if (call.userId === id) {
+            const professionalSocketId = connectedProfessionals.get(call.professionalId);
+            const professionalSocket = getSocketById(professionalSocketId);
+            if (professionalSocket) {
+              professionalSocket.emit('message', {
+                type: 'call-ended',
+                from: id,
+                to: call.professionalId,
+                timestamp: Date.now(),
+              });
+            }
+            activeCalls.delete(callId);
           }
-
-          sessions.delete(sessionId);
         }
+
+        // Remove from waiting queue
+        const waitingIndex = waitingUsers.indexOf(id);
+        if (waitingIndex > -1) {
+          waitingUsers.splice(waitingIndex, 1);
+        }
+        break;
       }
     }
 
-    users.delete(socket.id);
+    // Clean up professional
+    for (const [id, socketId] of connectedProfessionals) {
+      if (socketId === socket.id) {
+        connectedProfessionals.delete(id);
+
+        // End any active calls for this professional
+        for (const [callId, call] of activeCalls) {
+          if (call.professionalId === id) {
+            const userSocketId = connectedUsers.get(call.userId);
+            const userSocket = getSocketById(userSocketId);
+            if (userSocket) {
+              userSocket.emit('message', {
+                type: 'call-ended',
+                from: id,
+                to: call.userId,
+                timestamp: Date.now(),
+              });
+            }
+            activeCalls.delete(callId);
+          }
+        }
+        break;
+      }
+    }
+
+    // Process waiting users in case a new professional is available
+    processWaitingUsers();
   });
 });
 
-// Generate a unique user code
-function generateUserCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
+// Process waiting users queue
+function processWaitingUsers() {
+  while (waitingUsers.length > 0) {
+    const available = findAvailableProfessional();
+    if (!available) break;
+
+    const callerId = waitingUsers.shift();
+    const { professionalId, socketId: professionalSocketId } = available;
+
+    const userSocketId = connectedUsers.get(callerId);
+    if (!userSocketId) continue; // User disconnected
+
+    // Create call session
+    const callId = uuidv4();
+    activeCalls.set(callId, {
+      userId: callerId,
+      professionalId,
+      status: 'pending',
+      createdAt: Date.now(),
+    });
+
+    // Notify professional
+    const professionalSocket = getSocketById(professionalSocketId);
+    if (professionalSocket) {
+      professionalSocket.emit('call-request', {
+        type: 'call-request',
+        from: callerId,
+        to: professionalId,
+        callId,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Notify user
+    const userSocket = getSocketById(userSocketId);
+    if (userSocket) {
+      userSocket.emit('professional-available', {
+        professionalId,
+        callId,
+      });
+    }
   }
-  return code;
 }
 
+// Clean up stale calls periodically
+setInterval(() => {
+  const now = Date.now();
+  const timeout = 5 * 60 * 1000; // 5 minutes
+
+  for (const [callId, call] of activeCalls) {
+    if (call.status === 'pending' && now - call.createdAt > timeout) {
+      console.log(`Removing stale call: ${callId}`);
+      activeCalls.delete(callId);
+    }
+  }
+}, 60 * 1000); // Check every minute
+
 // Start server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`Signaling server running on port ${PORT}`);
+  console.log(`Novaid Signaling Server running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
 
-module.exports = { app, server, io };
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});

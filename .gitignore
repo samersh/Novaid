@@ -1,26 +1,5 @@
 # OSX
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Thumbnails
-._*
-
-# Files that might appear in the root of a volume
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-
-# Directories potentially created on remote AFP share
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
 
 # Xcode
 build/
@@ -39,7 +18,7 @@ DerivedData
 *.hmap
 *.ipa
 *.xcuserstate
-**/.xcode.env.local
+ios/.xcode.env.local
 
 # Android/IntelliJ
 build/
@@ -52,40 +31,35 @@ local.properties
 *.keystore
 !debug.keystore
 
-# node.js
+# Node
 node_modules/
 npm-debug.log
 yarn-error.log
 
-# CocoaPods
-ios/Pods/
+# Bundle artifacts
+*.jsbundle
 
-# Ruby / Bundler
+# Ruby / CocoaPods
+/ios/Pods/
 /vendor/bundle/
-/.bundle/
 
 # Temporary files
-*.swp
-*.swo
-*~
+*.log
+*.tmp
+*.temp
 
-# Env files
+# Environment files
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*.local
 
-# Metro
-.metro-health-check*
-
-# testing
+# Coverage
 coverage/
 
-# Typescript
-*.tsbuildinfo
+# Testing
+__tests__/__snapshots__/
 
-# React Native
-*.log
-*.jsbundle
-ios/*.xcworkspace
+# IDE
+.vscode/
+*.swp
+*.swo
