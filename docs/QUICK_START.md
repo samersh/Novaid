@@ -1,196 +1,149 @@
 # Quick Start Guide
 
-Get Novaid Remote Assistance running in under 10 minutes.
+Get Novaid Remote Assistance running in under 5 minutes.
 
 ## Prerequisites Check
 
 ```bash
+# Verify Xcode is installed
+xcode-select --version
+
 # Verify Node.js (18+)
 node --version
 
-# Verify npm (9+)
+# Verify npm
 npm --version
-
-# Verify React Native CLI
-npx react-native --version
 ```
 
-## 5-Minute Setup
+## 3-Minute Setup
 
-### Step 1: Install Dependencies
+### Step 1: Clone & Start Server (1 min)
 
 ```bash
+# Clone repository
+git clone https://github.com/samersh/Novaid.git
 cd Novaid
-npm install
+
+# Start signaling server
+cd server && npm install && npm start
 ```
 
-### Step 2: Start the Signaling Server
+Keep this terminal open.
+
+### Step 2: Open iOS Project (30 sec)
 
 ```bash
-# Open a new terminal
-cd server
-npm install
-npm start
+# Open new terminal
+cd NovaidAssist
+open NovaidAssist.xcodeproj
 ```
 
-You should see:
-```
-Novaid Signaling Server running on port 3001
-```
+### Step 3: Run the App (1.5 min)
 
-### Step 3: Run the App
+1. In Xcode, select **iPhone 16** simulator (or your connected device)
+2. Press **Cmd + R** to build and run
 
-**For iOS (Mac only):**
-```bash
-cd ios && pod install && cd ..
-npm run ios
-```
+## First Run Experience
 
-**For Android:**
-```bash
-npm run android
-```
+1. **Splash Screen** - Wait 2 seconds
+2. **Role Selection** - Choose:
+   - **User** - To request assistance
+   - **Professional** - To provide assistance
 
-### Step 4: Test the App
+## Testing the App
 
-1. Run the app on **two devices** (or simulators)
-2. On Device 1: Select **"User"** role
-3. On Device 2: Select **"Professional"** role
-4. On Device 1: Tap **"Start Call"**
-5. On Device 2: Tap **"Accept"** when call appears
-6. You're now in a video call with AR annotation support!
+### Single Device Demo
 
----
-
-## Quick Demo Mode
-
-Don't have two devices? Use Demo Mode:
-
-1. Launch the app
-2. Select "User"
-3. Tap "Try Demo"
+1. Launch app
+2. Select **User**
+3. Tap **Try Demo**
 4. Explore the video call interface
 
----
+### Two Device Testing
+
+**Device 1 (User):**
+1. Launch app → Select **User**
+2. Tap **Start Call**
+
+**Device 2 (Professional):**
+1. Launch app → Select **Professional**
+2. Wait for incoming call
+3. Tap **Accept**
+4. Draw annotations on the video!
 
 ## Key Features to Try
 
 ### As a User
-- **One-tap calling**: Just press the call button
-- **Rear camera view**: Your view is shared with the professional
-- **Receive annotations**: See drawings appear on your screen
+| Action | How |
+|--------|-----|
+| Start call | Tap the big phone button |
+| Demo mode | Tap "Try Demo" |
+| End call | Tap red phone button |
 
 ### As a Professional
-- **Accept calls**: Incoming calls show with user ID
-- **Draw annotations**: Tap the pencil icon to draw
-- **Freeze video**: Pause the video for precise annotations
-- **Multiple tools**: Pen, arrow, circle, pointer
-
----
+| Action | How |
+|--------|-----|
+| Accept call | Tap green checkmark |
+| Draw | Tap pencil → draw on screen |
+| Freeze video | Tap pause button |
+| Change color | Tap color circles |
+| Clear drawings | Tap "Clear All" |
 
 ## Annotation Tools
 
 | Tool | Icon | Usage |
 |------|------|-------|
 | Pen | ✏️ | Freehand drawing |
-| Arrow | ➡️ | Direction indicators |
-| Circle | ⭕ | Highlight areas |
+| Arrow | → | Direction indicators |
+| Circle | ○ | Highlight areas |
 | Pointer | 👆 | Animated attention marker |
-
-**Color Palette**: Red, Green, Blue, Yellow, Magenta, Cyan, White
-
----
-
-## Project Structure Overview
-
-```
-src/
-├── screens/           # App screens
-│   ├── user/         # User role: Splash, Home, VideoCall
-│   └── professional/ # Professional role: Splash, Home, VideoCall
-├── services/         # Core logic
-│   ├── WebRTCService.ts       # Video calling
-│   ├── AnnotationService.ts   # AR annotations
-│   └── VideoStabilizer.ts     # Camera stabilization
-└── components/       # UI components
-    ├── VideoView.tsx          # Video display
-    ├── AnnotationOverlay.tsx  # Annotation layer
-    └── DrawingCanvas.tsx      # Drawing interface
-```
-
----
 
 ## Common Commands
 
 ```bash
-# Start development server
-npm start
+# Start server
+cd server && npm start
 
-# Run on iOS
-npm run ios
-
-# Run on Android
-npm run android
+# Open Xcode project
+open NovaidAssist/NovaidAssist.xcodeproj
 
 # Run tests
-npm test
+xcodebuild test -scheme NovaidAssist -destination 'platform=iOS Simulator,name=iPhone 16'
 
-# Type check
-npm run typecheck
-
-# Start signaling server
-cd server && npm start
+# Check server health
+curl http://localhost:3001/health
 ```
-
----
-
-## Configuration Options
-
-### Change Server URL
-
-Edit `src/services/SignalingService.ts`:
-
-```typescript
-const DEFAULT_SERVER_URL = 'wss://your-server.com';
-```
-
-### Adjust Video Stabilization
-
-Edit `src/services/VideoStabilizer.ts`:
-
-```typescript
-// More smoothing (reduces shake but adds lag)
-smoothingFactor: 0.98
-
-// Less smoothing (more responsive but shakier)
-smoothingFactor: 0.85
-```
-
----
 
 ## Troubleshooting Quick Fixes
 
 | Problem | Solution |
 |---------|----------|
-| Metro bundler stuck | `npm start -- --reset-cache` |
-| iOS pods issue | `cd ios && pod install --repo-update` |
-| Android build fail | `cd android && ./gradlew clean` |
-| No connection | Check signaling server is running |
+| Build failed | Cmd + Shift + K (Clean) then Cmd + R |
+| Server won't start | Check if port 3001 is free |
+| Camera not working | Use physical device (not simulator) |
+| Call won't connect | Restart server and app |
 
----
+## Project Structure
+
+```
+Novaid/
+├── NovaidAssist/           # iOS App
+│   ├── Views/              # UI screens
+│   ├── Services/           # Business logic
+│   └── Models/             # Data models
+├── server/                 # Signaling server
+└── docs/                   # Documentation
+```
 
 ## Next Steps
 
-- Read the full [Installation Guide](INSTALLATION.md) for detailed setup
-- Explore the [README](../README.md) for architecture details
-- Check `/server/index.js` for signaling server customization
-- Review `/src/services/` for service customization
-
----
+1. Read full [Installation Guide](INSTALLATION.md)
+2. Explore the [README](../README.md)
+3. Check test files for examples
 
 ## Support
 
-- GitHub Issues: Report bugs or request features
-- Documentation: Check `/docs` for detailed guides
+- GitHub Issues: Report bugs
+- Documentation: Check `/docs` folder
 
 Happy coding! 🚀
