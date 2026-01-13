@@ -64,7 +64,7 @@ struct ProfessionalVideoCallView: View {
         } message: {
             Text("Are you sure you want to end this call?")
         }
-        .onChange(of: callManager.callState) { oldValue, newValue in
+        .onChange(of: callManager.callState) { newValue in
             if newValue == .disconnected || newValue == .failed || newValue == .idle {
                 dismiss()
             }

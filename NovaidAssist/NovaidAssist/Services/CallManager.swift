@@ -4,6 +4,7 @@ import Combine
 import AVFoundation
 
 /// Manages call state and coordinates between services
+@MainActor
 class CallManager: ObservableObject {
     static let shared = CallManager()
 
@@ -44,62 +45,62 @@ class CallManager: ObservableObject {
 
         // Setup signaling callbacks
         signalingService?.onConnected = { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.isConnectedToServer = true
             }
         }
 
         signalingService?.onDisconnected = { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.isConnectedToServer = false
             }
         }
 
         signalingService?.onCallRequest = { [weak self] callerId in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.handleIncomingCall(from: callerId)
             }
         }
 
         signalingService?.onCallAccepted = { [weak self] professionalId in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.handleCallAccepted(by: professionalId)
             }
         }
 
         signalingService?.onCallRejected = { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.handleCallRejected()
             }
         }
 
         signalingService?.onCallEnded = { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.endCall()
             }
         }
 
         signalingService?.onAnnotation = { [weak self] annotation in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.handleRemoteAnnotation(annotation)
             }
         }
 
         signalingService?.onVideoFreeze = { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.isVideoFrozen = true
             }
         }
 
         signalingService?.onVideoResume = { [weak self] annotations in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.isVideoFrozen = false
                 annotations.forEach { self?.annotations.append($0) }
             }
         }
 
         signalingService?.onNoProfessionalAvailable = { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.callState = .failed
                 self?.error = "No professional available at the moment"
             }
@@ -292,7 +293,7 @@ class CallManager: ObservableObject {
 
     private func startCallTimer() {
         callTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.callDuration += 1
             }
         }
