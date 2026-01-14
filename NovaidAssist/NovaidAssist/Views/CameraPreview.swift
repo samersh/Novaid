@@ -207,11 +207,11 @@ struct RemoteVideoView: View {
 
                 // Show frozen frame if available, otherwise show live frame
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
-                    // Video is already correctly oriented by the iPhone
-                    // Just display it with proper aspect ratio fitting
+                    // Rotate video content 90° clockwise to correct orientation on iPad
                     Image(uiImage: frame)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
+                        .rotationEffect(.degrees(90))  // Rotate content 90° clockwise
                         .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     VStack(spacing: 16) {
