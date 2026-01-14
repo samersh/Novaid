@@ -2,7 +2,7 @@ import SwiftUI
 import ARKit
 import RealityKit
 
-/// AR Camera view for the User side with proper landscape video streaming
+/// AR Camera view for the User side with proper landscape video streaming and world tracking
 struct ARCameraView: UIViewRepresentable {
     @ObservedObject var annotationManager: ARAnnotationManager
 
@@ -11,20 +11,26 @@ struct ARCameraView: UIViewRepresentable {
         context.coordinator.arView = arView
         context.coordinator.annotationManager = annotationManager
 
-        // Configure AR session for world tracking
+        // Configure AR session for world tracking with plane detection
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
+        configuration.environmentTexturing = .automatic
+
+        // Enable scene reconstruction if available (for better tracking)
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+        }
 
         arView.session.delegate = context.coordinator
         arView.session.run(configuration)
 
-        // Keep screen awake during AR session
+        // Keep screen awake
         UIApplication.shared.isIdleTimerDisabled = true
 
         // Start frame streaming
         context.coordinator.startFrameStreaming()
 
-        print("[AR] ARKit session started")
+        print("[AR] ARKit session started with plane detection")
         return arView
     }
 
@@ -49,7 +55,8 @@ struct ARCameraView: UIViewRepresentable {
         private let frameQueue = DispatchQueue(label: "com.novaid.arFrameQueue")
         private var isSessionReady = false
         private var lastFrameTime: Date = Date()
-        private let minFrameInterval: TimeInterval = 1.0 / 15.0 // 15 FPS
+        private let minFrameInterval: TimeInterval = 1.0 / 15.0
+        private var detectedPlanes: [UUID: ARPlaneAnchor] = [:]
 
         func startFrameStreaming() {
             frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
@@ -58,7 +65,6 @@ struct ARCameraView: UIViewRepresentable {
         }
 
         private func captureAndSendFrame() {
-            // Rate limiting
             let now = Date()
             guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
 
@@ -75,33 +81,24 @@ struct ARCameraView: UIViewRepresentable {
         private func processAndSendFrame(_ frame: ARFrame) {
             let pixelBuffer = frame.capturedImage
 
-            // Get the image dimensions
-            let width = CVPixelBufferGetWidth(pixelBuffer)
-            let height = CVPixelBufferGetHeight(pixelBuffer)
+            // Create CIImage from pixel buffer
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-            // Create CIImage and rotate for landscape right orientation
-            var ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            // Get device orientation to determine correct rotation
+            // ARKit camera always captures in native sensor orientation
+            // For landscape right: rotate 90° counter-clockwise
+            let rotatedImage = ciImage.oriented(.right)
 
-            // The camera captures in portrait orientation by default
-            // We need to rotate 90° clockwise for landscape right
-            // This is done by applying a transform
-
-            // Rotate 90° clockwise (for landscape right when device is in landscape)
-            let rotateTransform = CGAffineTransform(rotationAngle: -.pi / 2)
-            let translateTransform = CGAffineTransform(translationX: 0, y: CGFloat(width))
-            ciImage = ciImage.transformed(by: rotateTransform.concatenating(translateTransform))
-
-            // Now the image is in landscape orientation (height x width becomes width x height)
             let context = CIContext(options: [.useSoftwareRenderer: false])
-            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
+            guard let cgImage = context.createCGImage(rotatedImage, from: rotatedImage.extent) else { return }
 
-            // Create UIImage (already rotated, so use .up orientation)
-            let rotatedImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
+            // Create UIImage
+            let uiImage = UIImage(cgImage: cgImage)
 
-            // Resize for efficient transmission - landscape dimensions
-            let targetSize = CGSize(width: 854, height: 480) // 16:9 landscape
+            // Resize to landscape dimensions (16:9)
+            let targetSize = CGSize(width: 854, height: 480)
             UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
-            rotatedImage.draw(in: CGRect(origin: .zero, size: targetSize))
+            uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
             UIGraphicsEndImageContext()
 
@@ -117,12 +114,12 @@ struct ARCameraView: UIViewRepresentable {
                   let manager = annotationManager,
                   isSessionReady else { return }
 
-            // Place new annotations
+            // Place new annotations using raycasting
             for annotation in manager.annotations {
                 if annotationAnchors[annotation.id] != nil { continue }
 
                 if let firstPoint = annotation.points.first {
-                    placeAnnotationInWorld(annotation, normalizedPoint: firstPoint, in: arView)
+                    placeAnnotationWithRaycast(annotation, normalizedPoint: firstPoint, in: arView)
                 }
             }
 
@@ -134,10 +131,57 @@ struct ARCameraView: UIViewRepresentable {
             }
         }
 
-        private func placeAnnotationInWorld(_ annotation: ARTrackedAnnotation, normalizedPoint: AnnotationPoint, in arView: ARView) {
-            guard let currentFrame = arView.session.currentFrame else { return }
+        private func placeAnnotationWithRaycast(_ annotation: ARTrackedAnnotation, normalizedPoint: AnnotationPoint, in arView: ARView) {
+            // Convert normalized coordinates to screen coordinates
+            let screenX = normalizedPoint.x * arView.bounds.width
+            let screenY = normalizedPoint.y * arView.bounds.height
+            let screenPoint = CGPoint(x: screenX, y: screenY)
 
-            // Get camera position and orientation
+            // Try raycasting to find a real surface
+            if let worldPosition = performRaycast(from: screenPoint, in: arView) {
+                // Found a surface - anchor to it
+                createAnchorAtPosition(annotation, worldPosition: worldPosition, in: arView)
+                print("[AR] Placed annotation on detected surface at: \(worldPosition)")
+            } else {
+                // No surface found - place at fixed distance
+                if let fallbackPosition = placeAtFixedDistance(normalizedPoint: normalizedPoint, in: arView) {
+                    createAnchorAtPosition(annotation, worldPosition: fallbackPosition, in: arView)
+                    print("[AR] Placed annotation at fixed distance: \(fallbackPosition)")
+                }
+            }
+        }
+
+        private func performRaycast(from screenPoint: CGPoint, in arView: ARView) -> SIMD3<Float>? {
+            // First try: raycast against detected planes
+            if let query = arView.makeRaycastQuery(from: screenPoint, allowing: .existingPlaneGeometry, alignment: .any) {
+                let results = arView.session.raycast(query)
+                if let firstResult = results.first {
+                    return SIMD3<Float>(
+                        firstResult.worldTransform.columns.3.x,
+                        firstResult.worldTransform.columns.3.y,
+                        firstResult.worldTransform.columns.3.z
+                    )
+                }
+            }
+
+            // Second try: raycast against estimated planes
+            if let query = arView.makeRaycastQuery(from: screenPoint, allowing: .estimatedPlane, alignment: .any) {
+                let results = arView.session.raycast(query)
+                if let firstResult = results.first {
+                    return SIMD3<Float>(
+                        firstResult.worldTransform.columns.3.x,
+                        firstResult.worldTransform.columns.3.y,
+                        firstResult.worldTransform.columns.3.z
+                    )
+                }
+            }
+
+            return nil
+        }
+
+        private func placeAtFixedDistance(normalizedPoint: AnnotationPoint, in arView: ARView) -> SIMD3<Float>? {
+            guard let currentFrame = arView.session.currentFrame else { return nil }
+
             let cameraTransform = currentFrame.camera.transform
             let cameraPosition = SIMD3<Float>(
                 cameraTransform.columns.3.x,
@@ -145,21 +189,17 @@ struct ARCameraView: UIViewRepresentable {
                 cameraTransform.columns.3.z
             )
 
-            // Calculate direction based on normalized screen position
-            // Map from (0,0)-(1,1) to (-1,1)-(1,-1) in camera space
-            let normalizedX = Float(normalizedPoint.x) * 2.0 - 1.0  // -1 to 1 (left to right)
-            let normalizedY = -(Float(normalizedPoint.y) * 2.0 - 1.0)  // 1 to -1 (top to bottom)
+            // Calculate direction from normalized screen position
+            let normalizedX = Float(normalizedPoint.x) * 2.0 - 1.0
+            let normalizedY = -(Float(normalizedPoint.y) * 2.0 - 1.0)
 
-            // Create direction in camera local space
-            // Spread based on approximate FOV
-            let fovSpread: Float = 0.6
+            let fovSpread: Float = 0.5
             let localDirection = simd_normalize(SIMD3<Float>(
                 normalizedX * fovSpread,
                 normalizedY * fovSpread,
-                -1.0  // Forward in camera space
+                -1.0
             ))
 
-            // Transform to world space
             let rotationMatrix = simd_float3x3(
                 SIMD3<Float>(cameraTransform.columns.0.x, cameraTransform.columns.0.y, cameraTransform.columns.0.z),
                 SIMD3<Float>(cameraTransform.columns.1.x, cameraTransform.columns.1.y, cameraTransform.columns.1.z),
@@ -167,11 +207,11 @@ struct ARCameraView: UIViewRepresentable {
             )
             let worldDirection = rotationMatrix * localDirection
 
-            // Place at 0.4 meters distance
-            let distance: Float = 0.4
-            let worldPosition = cameraPosition + worldDirection * distance
+            let distance: Float = 0.5
+            return cameraPosition + worldDirection * distance
+        }
 
-            // Create anchor
+        private func createAnchorAtPosition(_ annotation: ARTrackedAnnotation, worldPosition: SIMD3<Float>, in arView: ARView) {
             let anchor = AnchorEntity(world: worldPosition)
             let entity = createMarkerEntity(color: UIColor(Color(hex: annotation.color) ?? .red))
             anchor.addChild(entity)
@@ -179,18 +219,17 @@ struct ARCameraView: UIViewRepresentable {
             arView.scene.addAnchor(anchor)
             annotationAnchors[annotation.id] = anchor
             annotationManager?.setWorldPosition(for: annotation.id, position: worldPosition)
-
-            print("[AR] Placed annotation at: \(worldPosition)")
         }
 
         private func createMarkerEntity(color: UIColor) -> Entity {
-            let sphere = MeshResource.generateSphere(radius: 0.015)
+            // Create a visible 3D marker
+            let sphere = MeshResource.generateSphere(radius: 0.02)
             let material = SimpleMaterial(color: color, isMetallic: false)
             let entity = ModelEntity(mesh: sphere, materials: [material])
 
-            // Add glow sphere
-            let outerSphere = MeshResource.generateSphere(radius: 0.025)
-            let outerMaterial = SimpleMaterial(color: color.withAlphaComponent(0.4), isMetallic: false)
+            // Add outer glow
+            let outerSphere = MeshResource.generateSphere(radius: 0.035)
+            let outerMaterial = SimpleMaterial(color: color.withAlphaComponent(0.3), isMetallic: false)
             let outerEntity = ModelEntity(mesh: outerSphere, materials: [outerMaterial])
             entity.addChild(outerEntity)
 
@@ -199,10 +238,33 @@ struct ARCameraView: UIViewRepresentable {
 
         // MARK: - ARSessionDelegate
 
+        func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+            for anchor in anchors {
+                if let planeAnchor = anchor as? ARPlaneAnchor {
+                    detectedPlanes[anchor.identifier] = planeAnchor
+                    print("[AR] Detected plane: \(planeAnchor.classification.description)")
+                }
+            }
+        }
+
+        func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+            for anchor in anchors {
+                if let planeAnchor = anchor as? ARPlaneAnchor {
+                    detectedPlanes[anchor.identifier] = planeAnchor
+                }
+            }
+        }
+
+        func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
+            for anchor in anchors {
+                detectedPlanes.removeValue(forKey: anchor.identifier)
+            }
+        }
+
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             if frame.camera.trackingState == .normal && !isSessionReady {
                 isSessionReady = true
-                print("[AR] Tracking ready")
+                print("[AR] Tracking ready - planes detected: \(detectedPlanes.count)")
                 DispatchQueue.main.async { [weak self] in
                     self?.processNewAnnotations()
                 }
@@ -345,7 +407,7 @@ struct ARAnnotationMarker: View {
 
     var body: some View {
         ZStack {
-            // Pulsing outer ring
+            // Pulsing ring
             Circle()
                 .stroke(annotation.swiftUIColor, lineWidth: 3)
                 .frame(width: 50, height: 50)
@@ -367,6 +429,24 @@ struct ARAnnotationMarker: View {
             withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: false)) {
                 isAnimating = true
             }
+        }
+    }
+}
+
+// MARK: - ARPlaneAnchor Classification Extension
+
+extension ARPlaneAnchor.Classification {
+    var description: String {
+        switch self {
+        case .wall: return "wall"
+        case .floor: return "floor"
+        case .ceiling: return "ceiling"
+        case .table: return "table"
+        case .seat: return "seat"
+        case .door: return "door"
+        case .window: return "window"
+        case .none: return "none"
+        @unknown default: return "unknown"
         }
     }
 }
