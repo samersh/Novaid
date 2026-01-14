@@ -1,7 +1,6 @@
 import SwiftUI
 import ARKit
 import RealityKit
-import CoreMotion
 
 /// AR Camera view for the User side with proper landscape video streaming and world tracking
 struct ARCameraView: UIViewRepresentable {
@@ -69,7 +68,6 @@ struct ARCameraView: UIViewRepresentable {
         private var lastFrameTime: Date = Date()
         private let minFrameInterval: TimeInterval = 1.0 / 15.0
         private var detectedPlanes: [UUID: ARPlaneAnchor] = [:]
-        private let motionManager = CMMotionManager()
         private var currentOrientation = DeviceOrientation()
         var isVideoFrozen = false
         private var lastCapturedFrame: UIImage?
@@ -79,12 +77,9 @@ struct ARCameraView: UIViewRepresentable {
                 self?.captureAndSendFrame()
             }
 
-            // Start motion updates for device orientation
-            if motionManager.isDeviceMotionAvailable {
-                motionManager.deviceMotionUpdateInterval = 1.0 / 60.0  // 60Hz
-                motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical)
-                print("[AR] Motion manager started for orientation tracking")
-            }
+            // Enable device orientation notifications
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            print("[AR] Device orientation tracking started")
         }
 
         func freezeVideo() {
@@ -124,15 +119,25 @@ struct ARCameraView: UIViewRepresentable {
         private func processAndSendFrame(_ frame: ARFrame) {
             let pixelBuffer = frame.capturedImage
 
-            // Capture current device orientation from motion manager
-            if let deviceMotion = motionManager.deviceMotion {
-                let attitude = deviceMotion.attitude
-                currentOrientation = DeviceOrientation(
-                    roll: attitude.roll,
-                    pitch: attitude.pitch,
-                    yaw: attitude.yaw
-                )
+            // Capture current device orientation state
+            let deviceOrientation = UIDevice.current.orientation
+            let orientationState: DeviceOrientation.OrientationState
+
+            switch deviceOrientation {
+            case .portrait:
+                orientationState = .portrait
+            case .portraitUpsideDown:
+                orientationState = .portraitUpsideDown
+            case .landscapeLeft:
+                orientationState = .landscapeLeft
+            case .landscapeRight:
+                orientationState = .landscapeRight
+            default:
+                // If orientation is unknown/faceUp/faceDown, keep the last known orientation
+                orientationState = currentOrientation.state
             }
+
+            currentOrientation = DeviceOrientation(state: orientationState)
 
             // Create CIImage from pixel buffer
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
@@ -360,7 +365,7 @@ struct ARCameraView: UIViewRepresentable {
         func cleanup() {
             frameTimer?.invalidate()
             frameTimer = nil
-            motionManager.stopDeviceMotionUpdates()
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
             arView?.session.pause()
         }
 

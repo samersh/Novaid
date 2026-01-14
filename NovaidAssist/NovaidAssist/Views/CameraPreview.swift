@@ -236,20 +236,27 @@ struct RemoteVideoView: View {
         }
     }
 
-    /// Calculate rotation angle from device orientation (roll, pitch, yaw)
+    /// Calculate rotation angle from device orientation state
     /// This ensures the video on iPad matches the physical orientation of the iPhone
     private func calculateRotationAngle(from orientation: DeviceOrientation) -> Angle {
-        // Use roll (rotation around longitudinal axis) to determine screen rotation
-        // Roll is in radians, convert to degrees
-        let rollDegrees = orientation.roll * 180.0 / .pi
-
-        // Normalize to -180 to 180 range
-        var normalizedRoll = rollDegrees.truncatingRemainder(dividingBy: 360.0)
-        if normalizedRoll > 180 { normalizedRoll -= 360 }
-        if normalizedRoll < -180 { normalizedRoll += 360 }
-
-        // Return as SwiftUI Angle
-        return Angle(degrees: -normalizedRoll)  // Negative because we want to counter-rotate
+        // Map discrete orientation states to rotation angles
+        switch orientation.state {
+        case .portrait:
+            // Portrait: rotate 90° clockwise (video needs to be upright)
+            return Angle(degrees: 90)
+        case .portraitUpsideDown:
+            // Portrait upside down: rotate 270° clockwise (or -90°)
+            return Angle(degrees: -90)
+        case .landscapeLeft:
+            // Landscape left: rotate 180°
+            return Angle(degrees: 180)
+        case .landscapeRight:
+            // Landscape right: no rotation (default orientation)
+            return Angle(degrees: 0)
+        case .unknown:
+            // Unknown: keep default (no rotation)
+            return Angle(degrees: 0)
+        }
     }
 
     private func calculateVideoFrame(containerSize: CGSize, aspectRatio: CGFloat) -> CGSize {

@@ -466,14 +466,18 @@ struct MultipeerMessage: Codable {
 
 // MARK: - Device Orientation Data
 struct DeviceOrientation: Codable {
-    var roll: Double = 0.0    // Rotation around longitudinal axis
-    var pitch: Double = 0.0   // Rotation around lateral axis
-    var yaw: Double = 0.0     // Rotation around vertical axis
+    enum OrientationState: String, Codable {
+        case portrait
+        case portraitUpsideDown
+        case landscapeLeft
+        case landscapeRight
+        case unknown
+    }
 
-    init(roll: Double = 0.0, pitch: Double = 0.0, yaw: Double = 0.0) {
-        self.roll = roll
-        self.pitch = pitch
-        self.yaw = yaw
+    var state: OrientationState = .landscapeRight
+
+    init(state: OrientationState = .landscapeRight) {
+        self.state = state
     }
 }
 
