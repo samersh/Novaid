@@ -1,12 +1,13 @@
 import SwiftUI
 import AVFoundation
 
-/// Camera preview view for displaying local camera feed
+/// Camera preview view for displaying local camera feed and optionally sending frames
 struct CameraPreviewView: UIViewRepresentable {
     var useRearCamera: Bool = true
+    var sendFrames: Bool = false  // Whether to send frames via MultipeerService
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(useRearCamera: useRearCamera)
+        Coordinator(useRearCamera: useRearCamera, sendFrames: sendFrames)
     }
 
     func makeUIView(context: Context) -> CameraPreviewUIView {
@@ -22,14 +23,18 @@ struct CameraPreviewView: UIViewRepresentable {
         }
     }
 
-    class Coordinator: NSObject {
+    class Coordinator: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         var captureSession: AVCaptureSession?
         var previewLayer: AVCaptureVideoPreviewLayer?
+        var videoOutput: AVCaptureVideoDataOutput?
         var isRunning = false
         let useRearCamera: Bool
+        let sendFrames: Bool
+        private let videoQueue = DispatchQueue(label: "com.novaid.videoQueue")
 
-        init(useRearCamera: Bool) {
+        init(useRearCamera: Bool, sendFrames: Bool) {
             self.useRearCamera = useRearCamera
+            self.sendFrames = sendFrames
             super.init()
         }
 
@@ -63,7 +68,7 @@ struct CameraPreviewView: UIViewRepresentable {
 
         private func configureSession(in view: UIView) {
             let session = AVCaptureSession()
-            session.sessionPreset = .high
+            session.sessionPreset = .medium  // Lower resolution for faster transmission
 
             // Get camera based on preference
             let position: AVCaptureDevice.Position = useRearCamera ? .back : .front
@@ -85,6 +90,20 @@ struct CameraPreviewView: UIViewRepresentable {
                 return
             }
 
+            // Add video output for frame capture if needed
+            if sendFrames {
+                let output = AVCaptureVideoDataOutput()
+                output.setSampleBufferDelegate(self, queue: videoQueue)
+                output.alwaysDiscardsLateVideoFrames = true
+                output.videoSettings = [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+                ]
+                if session.canAddOutput(output) {
+                    session.addOutput(output)
+                }
+                self.videoOutput = output
+            }
+
             // Create preview layer
             let previewLayer = AVCaptureVideoPreviewLayer(session: session)
             previewLayer.videoGravity = .resizeAspectFill
@@ -103,9 +122,45 @@ struct CameraPreviewView: UIViewRepresentable {
                 session.startRunning()
                 DispatchQueue.main.async {
                     self?.isRunning = true
-                    print("[Camera] Session started running")
+                    print("[Camera] Session started running, sendFrames: \(self?.sendFrames ?? false)")
                 }
             }
+        }
+
+        // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+        func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+            guard sendFrames else { return }
+
+            // Convert sample buffer to UIImage
+            guard let image = imageFromSampleBuffer(sampleBuffer) else { return }
+
+            // Send frame via MultipeerService
+            Task { @MainActor in
+                MultipeerService.shared.sendVideoFrame(image)
+            }
+        }
+
+        private func imageFromSampleBuffer(_ sampleBuffer: CMSampleBuffer) -> UIImage? {
+            guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
+
+            CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+
+            let ciImage = CIImage(cvPixelBuffer: imageBuffer)
+            let context = CIContext()
+            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+
+            // Rotate image to correct orientation
+            let image = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+
+            // Resize to reduce data size
+            let targetSize = CGSize(width: 480, height: 640)
+            UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+            let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+
+            return resizedImage
         }
 
         func stopCamera() {
@@ -141,14 +196,46 @@ class CameraPreviewUIView: UIView {
     }
 }
 
+/// View to display received video frames from remote peer
+struct RemoteVideoView: View {
+    @ObservedObject var multipeerService = MultipeerService.shared
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.black
+
+                if let frame = multipeerService.receivedVideoFrame {
+                    Image(uiImage: frame)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(2)
+
+                        Text("Waiting for video...")
+                            .font(.headline)
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Camera preview with stabilization overlay
 struct StabilizedCameraPreview: View {
     @ObservedObject var stabilizer: VideoStabilizer
     var useRearCamera: Bool = true
+    var sendFrames: Bool = false
 
     var body: some View {
         GeometryReader { geometry in
-            CameraPreviewView(useRearCamera: useRearCamera)
+            CameraPreviewView(useRearCamera: useRearCamera, sendFrames: sendFrames)
                 .offset(x: stabilizer.currentOffset.x, y: stabilizer.currentOffset.y)
                 .scaleEffect(1.05) // Slight zoom to hide edges during stabilization
                 .clipped()

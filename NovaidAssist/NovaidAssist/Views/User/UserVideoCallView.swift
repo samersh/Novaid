@@ -17,8 +17,8 @@ struct UserVideoCallView: View {
             // Video background
             Color.black.ignoresSafeArea()
 
-            // Camera preview - using REAR camera
-            CameraPreviewView(useRearCamera: true)
+            // Camera preview - using REAR camera and sending frames
+            CameraPreviewView(useRearCamera: true, sendFrames: true)
                 .ignoresSafeArea()
 
             // AR Annotations overlay

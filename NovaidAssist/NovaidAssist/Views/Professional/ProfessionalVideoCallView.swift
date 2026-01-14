@@ -16,8 +16,8 @@ struct ProfessionalVideoCallView: View {
             // Video background
             Color.black.ignoresSafeArea()
 
-            // Remote video (user's camera) - for demo, show local camera
-            CameraPreviewView(useRearCamera: false)
+            // Remote video from User's iPhone camera
+            RemoteVideoView()
                 .ignoresSafeArea()
 
             // Annotations overlay

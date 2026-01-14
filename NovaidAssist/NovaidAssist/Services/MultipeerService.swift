@@ -1,6 +1,7 @@
 import Foundation
 import MultipeerConnectivity
 import Combine
+import UIKit
 
 /// Service for peer-to-peer connection using MultipeerConnectivity
 /// Allows iPhone and iPad to connect directly via WiFi/Bluetooth without a server
@@ -18,6 +19,7 @@ class MultipeerService: NSObject, ObservableObject {
     @Published var isBrowsing = false
     @Published var connectionStatus: String = "Disconnected"
     @Published var incomingInvitation: (from: MCPeerID, handler: (Bool, MCSession?) -> Void)?
+    @Published var receivedVideoFrame: UIImage?
 
     // MARK: - Callbacks
     var onConnected: (() -> Void)?
@@ -29,12 +31,15 @@ class MultipeerService: NSObject, ObservableObject {
     var onAnnotationReceived: ((Annotation) -> Void)?
     var onVideoFrozen: (() -> Void)?
     var onVideoResumed: (([Annotation]) -> Void)?
+    var onVideoFrameReceived: ((UIImage) -> Void)?
 
     // MARK: - Private Properties
     private var peerID: MCPeerID!
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
+    private var lastFrameTime: Date = Date()
+    private let minFrameInterval: TimeInterval = 1.0 / 15.0 // 15 FPS max
 
     private let serviceType = "novaid-assist"
 
@@ -131,15 +136,14 @@ class MultipeerService: NSObject, ObservableObject {
 
     // MARK: - Data Transmission
 
-    /// Send data to connected peer
-    func sendData(_ data: Data) {
+    /// Send data to connected peer (reliable)
+    func sendData(_ data: Data, reliable: Bool = true) {
         guard !session.connectedPeers.isEmpty else {
-            print("[Multipeer] No connected peers to send data to")
             return
         }
 
         do {
-            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+            try session.send(data, toPeers: session.connectedPeers, with: reliable ? .reliable : .unreliable)
         } catch {
             print("[Multipeer] Failed to send data: \(error)")
         }
@@ -149,6 +153,30 @@ class MultipeerService: NSObject, ObservableObject {
     func sendMessage(_ message: MultipeerMessage) {
         guard let data = try? JSONEncoder().encode(message) else { return }
         sendData(data)
+    }
+
+    /// Send video frame (compressed JPEG)
+    func sendVideoFrame(_ image: UIImage) {
+        // Rate limit to prevent flooding
+        let now = Date()
+        guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
+        lastFrameTime = now
+
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        // Compress to JPEG with lower quality for speed
+        guard let jpegData = image.jpegData(compressionQuality: 0.3) else { return }
+
+        // Create video frame message
+        let message = MultipeerMessage(type: .videoFrame, payload: jpegData)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+
+        // Send unreliable for speed (like UDP)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+        } catch {
+            // Silently fail for video frames
+        }
     }
 
     /// Send call request
@@ -214,6 +242,7 @@ class MultipeerService: NSObject, ObservableObject {
         connectedPeerId = nil
         availablePeers = []
         connectionStatus = "Disconnected"
+        receivedVideoFrame = nil
         onDisconnected?()
     }
 }
@@ -249,13 +278,13 @@ extension MultipeerService: MCSessionDelegate {
     }
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
+        // Parse message
+        guard let message = try? JSONDecoder().decode(MultipeerMessage.self, from: data) else {
+            return
+        }
+
         Task { @MainActor in
             self.onDataReceived?(data, peerID)
-
-            // Parse message
-            guard let message = try? JSONDecoder().decode(MultipeerMessage.self, from: data) else {
-                return
-            }
 
             switch message.type {
             case .callRequest:
@@ -283,6 +312,13 @@ extension MultipeerService: MCSessionDelegate {
                 if let payload = message.payload,
                    let annotations = try? JSONDecoder().decode([Annotation].self, from: payload) {
                     self.onVideoResumed?(annotations)
+                }
+
+            case .videoFrame:
+                if let payload = message.payload,
+                   let image = UIImage(data: payload) {
+                    self.receivedVideoFrame = image
+                    self.onVideoFrameReceived?(image)
                 }
             }
         }
@@ -378,6 +414,7 @@ struct MultipeerMessage: Codable {
         case annotation
         case freezeVideo
         case resumeVideo
+        case videoFrame
     }
 
     let type: MessageType
