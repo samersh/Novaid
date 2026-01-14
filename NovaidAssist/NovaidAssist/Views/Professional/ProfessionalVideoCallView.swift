@@ -72,10 +72,14 @@ struct ProfessionalVideoCallView: View {
             }
         }
         .onAppear {
+            // Keep screen awake during call
+            UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             setupAnnotationCallback()
         }
         .onDisappear {
+            // Re-enable screen sleep
+            UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             OrientationManager.shared.unlock()
         }

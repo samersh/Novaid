@@ -16,17 +16,16 @@ struct ARCameraView: UIViewRepresentable {
         configuration.planeDetection = [.horizontal, .vertical]
         configuration.environmentTexturing = .automatic
 
-        // Enable high resolution frame capture for streaming
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-            configuration.frameSemantics.insert(.sceneDepth)
-        }
-
         arView.session.delegate = context.coordinator
         arView.session.run(configuration)
+
+        // Keep screen awake during AR session
+        UIApplication.shared.isIdleTimerDisabled = true
 
         // Start frame streaming
         context.coordinator.startFrameStreaming()
 
+        print("[AR] ARKit session started")
         return arView
     }
 
@@ -39,12 +38,19 @@ struct ARCameraView: UIViewRepresentable {
         Coordinator()
     }
 
+    static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
+        // Re-enable idle timer when AR view is removed
+        UIApplication.shared.isIdleTimerDisabled = false
+        coordinator.cleanup()
+    }
+
     class Coordinator: NSObject, ARSessionDelegate {
         var arView: ARView?
         var annotationManager: ARAnnotationManager?
         private var frameTimer: Timer?
         private var annotationAnchors: [String: AnchorEntity] = [:]
         private let frameQueue = DispatchQueue(label: "com.novaid.arFrameQueue")
+        private var isSessionReady = false
 
         func startFrameStreaming() {
             // Stream frames at ~15 FPS
@@ -83,24 +89,17 @@ struct ARCameraView: UIViewRepresentable {
 
         func updateAnnotations() {
             guard let arView = arView,
-                  let manager = annotationManager else { return }
+                  let manager = annotationManager,
+                  isSessionReady else { return }
 
-            // Process each annotation
+            // Process each annotation that needs to be placed
             for annotation in manager.annotations {
-                // Skip if already placed
+                // Skip if already placed in AR
                 if annotationAnchors[annotation.id] != nil { continue }
 
-                // If annotation has a world position, create anchor
-                if let worldPosition = annotation.worldPosition {
-                    placeAnnotation(annotation, at: worldPosition, in: arView)
-                } else if let normalizedPosition = annotation.points.first {
-                    // Try to find world position from screen coordinates
-                    let screenPoint = normalizedPosition.toAbsolute(in: arView.bounds.size)
-                    if let worldPos = hitTest(at: screenPoint, in: arView) {
-                        // Update annotation with world position
-                        manager.setWorldPosition(for: annotation.id, position: worldPos)
-                        placeAnnotation(annotation, at: worldPos, in: arView)
-                    }
+                // Place annotation in world space
+                if let firstPoint = annotation.points.first {
+                    placeAnnotationInWorld(annotation, normalizedPoint: firstPoint, in: arView)
                 }
             }
 
@@ -110,117 +109,158 @@ struct ARCameraView: UIViewRepresentable {
                 if !currentIds.contains(id) {
                     arView.scene.removeAnchor(anchor)
                     annotationAnchors.removeValue(forKey: id)
+                    print("[AR] Removed annotation anchor: \(id)")
                 }
             }
         }
 
-        private func placeAnnotation(_ annotation: Annotation, at worldPosition: SIMD3<Float>, in arView: ARView) {
-            let anchor = AnchorEntity(world: worldPosition)
-
-            // Create visual representation based on annotation type
-            let entity = createAnnotationEntity(for: annotation)
-            anchor.addChild(entity)
-
-            arView.scene.addAnchor(anchor)
-            annotationAnchors[annotation.id] = anchor
-        }
-
-        private func createAnnotationEntity(for annotation: Annotation) -> Entity {
-            let color = UIColor(Color(hex: annotation.color) ?? .red)
-
-            switch annotation.type {
-            case .pointer, .animation:
-                // Create a sphere for pointer
-                let mesh = MeshResource.generateSphere(radius: 0.02)
-                let material = SimpleMaterial(color: color, isMetallic: false)
-                return ModelEntity(mesh: mesh, materials: [material])
-
-            case .circle:
-                // Create a ring/torus for circle
-                let mesh = MeshResource.generateSphere(radius: 0.03)
-                let material = SimpleMaterial(color: color.withAlphaComponent(0.7), isMetallic: false)
-                return ModelEntity(mesh: mesh, materials: [material])
-
-            case .arrow:
-                // Create a cone for arrow
-                let mesh = MeshResource.generateCone(height: 0.05, radius: 0.015)
-                let material = SimpleMaterial(color: color, isMetallic: false)
-                let entity = ModelEntity(mesh: mesh, materials: [material])
-                // Point the arrow forward
-                entity.orientation = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(1, 0, 0))
-                return entity
-
-            case .drawing, .text:
-                // Create a small box for drawing points
-                let mesh = MeshResource.generateBox(size: 0.01)
-                let material = SimpleMaterial(color: color, isMetallic: false)
-                return ModelEntity(mesh: mesh, materials: [material])
-            }
-        }
-
-        private func hitTest(at point: CGPoint, in arView: ARView) -> SIMD3<Float>? {
-            // Perform raycast to find world position
-            guard let query = arView.makeRaycastQuery(from: point, allowing: .estimatedPlane, alignment: .any) else {
-                return nil
+        private func placeAnnotationInWorld(_ annotation: ARTrackedAnnotation, normalizedPoint: AnnotationPoint, in arView: ARView) {
+            guard let currentFrame = arView.session.currentFrame else {
+                print("[AR] No current frame available")
+                return
             }
 
-            let results = arView.session.raycast(query)
-            if let firstResult = results.first {
-                return SIMD3<Float>(
-                    firstResult.worldTransform.columns.3.x,
-                    firstResult.worldTransform.columns.3.y,
-                    firstResult.worldTransform.columns.3.z
-                )
-            }
-
-            // Fallback: place at fixed distance from camera
-            guard let currentFrame = arView.session.currentFrame else { return nil }
-
+            // Get camera transform
             let cameraTransform = currentFrame.camera.transform
+
+            // Convert normalized 2D position to a direction in camera space
+            // Normalized coordinates: (0,0) = top-left, (1,1) = bottom-right
+            // We need to map this to camera ray direction
+
+            // Get the intrinsics to properly calculate ray direction
+            let intrinsics = currentFrame.camera.intrinsics
+            let imageResolution = currentFrame.camera.imageResolution
+
+            // Convert normalized to pixel coordinates
+            let pixelX = normalizedPoint.x * CGFloat(imageResolution.width)
+            let pixelY = normalizedPoint.y * CGFloat(imageResolution.height)
+
+            // Calculate ray direction in camera space using intrinsics
+            let fx = intrinsics[0, 0]
+            let fy = intrinsics[1, 1]
+            let cx = intrinsics[2, 0]
+            let cy = intrinsics[2, 1]
+
+            // Direction in camera space (camera looks down -Z)
+            let dirX = (Float(pixelX) - cx) / fx
+            let dirY = (Float(pixelY) - cy) / fy
+            let directionInCamera = simd_normalize(SIMD3<Float>(dirX, -dirY, -1.0))
+
+            // Transform direction to world space
+            let rotationMatrix = simd_float3x3(
+                SIMD3<Float>(cameraTransform.columns.0.x, cameraTransform.columns.0.y, cameraTransform.columns.0.z),
+                SIMD3<Float>(cameraTransform.columns.1.x, cameraTransform.columns.1.y, cameraTransform.columns.1.z),
+                SIMD3<Float>(cameraTransform.columns.2.x, cameraTransform.columns.2.y, cameraTransform.columns.2.z)
+            )
+            let directionInWorld = rotationMatrix * directionInCamera
+
+            // Camera position in world space
             let cameraPosition = SIMD3<Float>(
                 cameraTransform.columns.3.x,
                 cameraTransform.columns.3.y,
                 cameraTransform.columns.3.z
             )
 
-            // Get camera forward direction
-            let cameraForward = SIMD3<Float>(
-                -cameraTransform.columns.2.x,
-                -cameraTransform.columns.2.y,
-                -cameraTransform.columns.2.z
-            )
+            // Place annotation at fixed distance (0.5 meters) from camera along ray
+            let distance: Float = 0.5
+            let worldPosition = cameraPosition + directionInWorld * distance
 
-            // Place 1 meter in front of camera
-            return cameraPosition + cameraForward * 1.0
+            // Create anchor at world position
+            let anchor = AnchorEntity(world: worldPosition)
+
+            // Create visual marker
+            let entity = createAnnotationEntity(for: annotation)
+            anchor.addChild(entity)
+
+            arView.scene.addAnchor(anchor)
+            annotationAnchors[annotation.id] = anchor
+
+            // Store world position in annotation
+            annotationManager?.setWorldPosition(for: annotation.id, position: worldPosition)
+
+            print("[AR] Placed annotation at world position: \(worldPosition)")
+        }
+
+        private func createAnnotationEntity(for annotation: ARTrackedAnnotation) -> Entity {
+            let color = UIColor(Color(hex: annotation.color) ?? .red)
+
+            // Create a visible 3D marker - sphere with glow effect
+            let sphere = MeshResource.generateSphere(radius: 0.025)
+            let material = SimpleMaterial(color: color, isMetallic: false)
+            let entity = ModelEntity(mesh: sphere, materials: [material])
+
+            // Add a larger transparent sphere for visibility
+            let outerSphere = MeshResource.generateSphere(radius: 0.04)
+            let outerMaterial = SimpleMaterial(color: color.withAlphaComponent(0.3), isMetallic: false)
+            let outerEntity = ModelEntity(mesh: outerSphere, materials: [outerMaterial])
+            entity.addChild(outerEntity)
+
+            return entity
         }
 
         // MARK: - ARSessionDelegate
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            // Mark session as ready once we have tracking
+            if frame.camera.trackingState == .normal && !isSessionReady {
+                isSessionReady = true
+                print("[AR] Session tracking is ready")
+
+                // Process any pending annotations
+                DispatchQueue.main.async { [weak self] in
+                    self?.updateAnnotations()
+                }
+            }
+
             // Update 2D overlay positions for annotations based on current camera
-            guard let manager = annotationManager else { return }
+            guard let manager = annotationManager, let arView = arView else { return }
 
             for (id, anchor) in annotationAnchors {
                 let worldPosition = anchor.position(relativeTo: nil)
 
                 // Project 3D world position to 2D screen coordinates
-                guard let arView = arView else { continue }
-                let screenPoint = arView.project(worldPosition)
-
-                if let point = screenPoint {
-                    // Update the annotation's screen position for overlay rendering
-                    let normalizedPoint = AnnotationPoint.normalized(
-                        from: point,
-                        in: arView.bounds.size
-                    )
-                    manager.updateScreenPosition(for: id, point: normalizedPoint)
+                if let screenPoint = arView.project(worldPosition) {
+                    // Check if point is in front of camera and on screen
+                    if screenPoint.x >= 0 && screenPoint.x <= arView.bounds.width &&
+                       screenPoint.y >= 0 && screenPoint.y <= arView.bounds.height {
+                        let normalizedPoint = AnnotationPoint.normalized(
+                            from: screenPoint,
+                            in: arView.bounds.size
+                        )
+                        manager.updateScreenPosition(for: id, point: normalizedPoint)
+                        manager.setVisibility(for: id, visible: true)
+                    } else {
+                        // Annotation is off-screen
+                        manager.setVisibility(for: id, visible: false)
+                    }
+                } else {
+                    // Behind camera
+                    manager.setVisibility(for: id, visible: false)
                 }
             }
         }
 
-        deinit {
+        func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+            switch camera.trackingState {
+            case .notAvailable:
+                print("[AR] Tracking not available")
+            case .limited(let reason):
+                print("[AR] Tracking limited: \(reason)")
+            case .normal:
+                print("[AR] Tracking normal")
+                isSessionReady = true
+            }
+        }
+
+        func cleanup() {
             frameTimer?.invalidate()
+            frameTimer = nil
             arView?.session.pause()
+            print("[AR] Session cleaned up")
+        }
+
+        deinit {
+            cleanup()
         }
     }
 }
@@ -233,6 +273,7 @@ class ARAnnotationManager: ObservableObject {
     func addAnnotation(_ annotation: Annotation) {
         let tracked = ARTrackedAnnotation(from: annotation)
         annotations.append(tracked)
+        print("[AR Manager] Added annotation: \(annotation.id)")
     }
 
     /// Set world position for an annotation
@@ -249,9 +290,17 @@ class ARAnnotationManager: ObservableObject {
         }
     }
 
+    /// Set visibility for annotation
+    func setVisibility(for id: String, visible: Bool) {
+        if let index = annotations.firstIndex(where: { $0.id == id }) {
+            annotations[index].isVisible = visible
+        }
+    }
+
     /// Clear all annotations
     func clearAll() {
         annotations.removeAll()
+        print("[AR Manager] Cleared all annotations")
     }
 }
 
@@ -268,6 +317,7 @@ struct ARTrackedAnnotation: Identifiable {
     // AR tracking data
     var worldPosition: SIMD3<Float>?
     var currentScreenPosition: AnnotationPoint?
+    var isVisible: Bool = true
 
     init(from annotation: Annotation) {
         self.id = annotation.id
@@ -292,7 +342,7 @@ struct ARAnnotationOverlayView: View {
         GeometryReader { geometry in
             ZStack {
                 ForEach(annotations) { annotation in
-                    if let screenPos = annotation.currentScreenPosition {
+                    if annotation.isVisible, let screenPos = annotation.currentScreenPosition {
                         ARAnnotationMarker(
                             annotation: annotation,
                             position: screenPos.toAbsolute(in: geometry.size)
@@ -305,7 +355,7 @@ struct ARAnnotationOverlayView: View {
     }
 }
 
-/// Visual marker for AR annotation
+/// Visual marker for AR annotation (2D overlay that follows 3D position)
 struct ARAnnotationMarker: View {
     let annotation: ARTrackedAnnotation
     let position: CGPoint
@@ -314,17 +364,22 @@ struct ARAnnotationMarker: View {
 
     var body: some View {
         ZStack {
-            // Pulsing ring
+            // Outer pulsing ring
             Circle()
-                .stroke(annotation.swiftUIColor, lineWidth: 2)
-                .frame(width: 40, height: 40)
-                .scaleEffect(isAnimating ? 1.5 : 1.0)
+                .stroke(annotation.swiftUIColor, lineWidth: 3)
+                .frame(width: 50, height: 50)
+                .scaleEffect(isAnimating ? 1.8 : 1.0)
                 .opacity(isAnimating ? 0 : 0.8)
 
-            // Center dot
+            // Middle ring
+            Circle()
+                .stroke(annotation.swiftUIColor, lineWidth: 2)
+                .frame(width: 35, height: 35)
+
+            // Center filled dot
             Circle()
                 .fill(annotation.swiftUIColor)
-                .frame(width: 16, height: 16)
+                .frame(width: 20, height: 20)
 
             // Icon based on type
             annotationIcon
@@ -333,7 +388,7 @@ struct ARAnnotationMarker: View {
         }
         .position(position)
         .onAppear {
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: false)) {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
                 isAnimating = true
             }
         }
