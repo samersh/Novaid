@@ -12,55 +12,62 @@ struct ProfessionalVideoCallView: View {
     @State private var controlsTimer: Timer?
 
     var body: some View {
-        ZStack {
-            // Video background
-            Color.black.ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                // Video background
+                Color.black.ignoresSafeArea()
 
-            // Remote video from User's iPhone camera
-            RemoteVideoView()
-                .ignoresSafeArea()
+                // Calculate video frame bounds
+                let videoFrame = VideoFrameHelper.calculateVideoFrame(containerSize: geometry.size)
 
-            // Annotations overlay
-            AnnotationOverlayView(annotations: callManager.annotations)
-                .ignoresSafeArea()
+                // Remote video from User's iPhone camera
+                RemoteVideoView()
+                    .ignoresSafeArea()
 
-            // Drawing canvas (when in drawing mode)
-            if isDrawingMode {
-                DrawingCanvasView(
-                    annotationService: callManager.annotationService,
-                    onAnnotationCreated: { annotation in
-                        callManager.annotations.append(annotation)
-                        // Send via multipeer if connected
-                        if multipeerService.isConnected {
-                            multipeerService.sendAnnotation(annotation)
-                            print("[Professional] Sent annotation to user")
+                // Annotations overlay - constrained to video area
+                AnnotationOverlayView(annotations: callManager.annotations)
+                    .frame(width: videoFrame.width, height: videoFrame.height)
+                    .position(x: videoFrame.midX, y: videoFrame.midY)
+
+                // Drawing canvas (when in drawing mode) - constrained to video area
+                if isDrawingMode {
+                    DrawingCanvasView(
+                        annotationService: callManager.annotationService,
+                        onAnnotationCreated: { annotation in
+                            callManager.annotations.append(annotation)
+                            // Send via multipeer if connected
+                            if multipeerService.isConnected {
+                                multipeerService.sendAnnotation(annotation)
+                                print("[Professional] Sent annotation to user")
+                            }
                         }
+                    )
+                    .frame(width: videoFrame.width, height: videoFrame.height)
+                    .position(x: videoFrame.midX, y: videoFrame.midY)
+                }
+
+                // Frozen badge
+                if callManager.isVideoFrozen {
+                    VStack {
+                        frozenBadge
+                            .padding(.top, 100)
+                        Spacer()
                     }
-                )
-                .ignoresSafeArea()
-            }
-
-            // Frozen badge
-            if callManager.isVideoFrozen {
-                VStack {
-                    frozenBadge
-                        .padding(.top, 100)
-                    Spacer()
                 }
-            }
 
-            // Connection status
-            if !multipeerService.isConnected {
-                VStack {
-                    Spacer()
-                    connectionBanner
-                        .padding(.bottom, 150)
+                // Connection status
+                if !multipeerService.isConnected {
+                    VStack {
+                        Spacer()
+                        connectionBanner
+                            .padding(.bottom, 150)
+                    }
                 }
-            }
 
-            // Controls overlay
-            if showControls {
-                controlsOverlay
+                // Controls overlay
+                if showControls {
+                    controlsOverlay
+                }
             }
         }
         .navigationBarHidden(true)

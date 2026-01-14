@@ -199,6 +199,7 @@ class CameraPreviewUIView: UIView {
 /// View to display received video frames from remote peer
 struct RemoteVideoView: View {
     @ObservedObject var multipeerService = MultipeerService.shared
+    var videoAspectRatio: CGFloat = 16.0 / 9.0  // Landscape video
 
     var body: some View {
         GeometryReader { geometry in
@@ -206,11 +207,14 @@ struct RemoteVideoView: View {
                 Color.black
 
                 if let frame = multipeerService.receivedVideoFrame {
+                    // Calculate the frame size to fit while maintaining aspect ratio
+                    let videoFrame = calculateVideoFrame(containerSize: geometry.size, aspectRatio: videoAspectRatio)
+
                     Image(uiImage: frame)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: videoFrame.width, height: videoFrame.height)
+                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -224,6 +228,45 @@ struct RemoteVideoView: View {
                 }
             }
         }
+    }
+
+    private func calculateVideoFrame(containerSize: CGSize, aspectRatio: CGFloat) -> CGSize {
+        let containerAspect = containerSize.width / containerSize.height
+
+        if containerAspect > aspectRatio {
+            // Container is wider - fit to height
+            let height = containerSize.height
+            let width = height * aspectRatio
+            return CGSize(width: width, height: height)
+        } else {
+            // Container is taller - fit to width
+            let width = containerSize.width
+            let height = width / aspectRatio
+            return CGSize(width: width, height: height)
+        }
+    }
+}
+
+/// Helper to get video frame bounds for annotation overlay
+struct VideoFrameHelper {
+    static func calculateVideoFrame(containerSize: CGSize, aspectRatio: CGFloat = 16.0 / 9.0) -> CGRect {
+        let containerAspect = containerSize.width / containerSize.height
+
+        var frameSize: CGSize
+        if containerAspect > aspectRatio {
+            let height = containerSize.height
+            let width = height * aspectRatio
+            frameSize = CGSize(width: width, height: height)
+        } else {
+            let width = containerSize.width
+            let height = width / aspectRatio
+            frameSize = CGSize(width: width, height: height)
+        }
+
+        let x = (containerSize.width - frameSize.width) / 2
+        let y = (containerSize.height - frameSize.height) / 2
+
+        return CGRect(origin: CGPoint(x: x, y: y), size: frameSize)
     }
 }
 
