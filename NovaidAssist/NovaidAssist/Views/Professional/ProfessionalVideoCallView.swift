@@ -340,6 +340,8 @@ struct ProfessionalVideoCallView: View {
     private func toggleFreeze() {
         if callManager.isVideoFrozen {
             callManager.isVideoFrozen = false
+            // Clear frozen frame to resume live video
+            multipeerService.frozenFrame = nil
             if multipeerService.isConnected {
                 multipeerService.sendResumeVideo(annotations: callManager.annotations)
             }

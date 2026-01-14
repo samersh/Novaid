@@ -1,10 +1,12 @@
 import SwiftUI
 import ARKit
 import RealityKit
+import CoreMotion
 
 /// AR Camera view for the User side with proper landscape video streaming and world tracking
 struct ARCameraView: UIViewRepresentable {
     @ObservedObject var annotationManager: ARAnnotationManager
+    var isVideoFrozen: Bool = false
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
@@ -36,6 +38,16 @@ struct ARCameraView: UIViewRepresentable {
 
     func updateUIView(_ uiView: ARView, context: Context) {
         context.coordinator.processNewAnnotations()
+
+        // Handle freeze/resume
+        if isVideoFrozen != context.coordinator.isVideoFrozen {
+            context.coordinator.isVideoFrozen = isVideoFrozen
+            if isVideoFrozen {
+                context.coordinator.freezeVideo()
+            } else {
+                context.coordinator.resumeVideo()
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -57,11 +69,42 @@ struct ARCameraView: UIViewRepresentable {
         private var lastFrameTime: Date = Date()
         private let minFrameInterval: TimeInterval = 1.0 / 15.0
         private var detectedPlanes: [UUID: ARPlaneAnchor] = [:]
+        private let motionManager = CMMotionManager()
+        private var currentOrientation = DeviceOrientation()
+        var isVideoFrozen = false
+        private var lastCapturedFrame: UIImage?
 
         func startFrameStreaming() {
             frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
                 self?.captureAndSendFrame()
             }
+
+            // Start motion updates for device orientation
+            if motionManager.isDeviceMotionAvailable {
+                motionManager.deviceMotionUpdateInterval = 1.0 / 60.0  // 60Hz
+                motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical)
+                print("[AR] Motion manager started for orientation tracking")
+            }
+        }
+
+        func freezeVideo() {
+            frameTimer?.invalidate()
+            frameTimer = nil
+
+            // Capture and send the current frozen frame
+            if let lastFrame = lastCapturedFrame {
+                Task { @MainActor in
+                    MultipeerService.shared.sendFrozenFrame(lastFrame)
+                    print("[AR] Sent frozen frame to iPad")
+                }
+            }
+            print("[AR] Video frozen - stopped frame capture")
+        }
+
+        func resumeVideo() {
+            // Restart frame streaming
+            startFrameStreaming()
+            print("[AR] Video resumed - restarted frame capture")
         }
 
         private func captureAndSendFrame() {
@@ -80,6 +123,16 @@ struct ARCameraView: UIViewRepresentable {
 
         private func processAndSendFrame(_ frame: ARFrame) {
             let pixelBuffer = frame.capturedImage
+
+            // Capture current device orientation from motion manager
+            if let deviceMotion = motionManager.deviceMotion {
+                let attitude = deviceMotion.attitude
+                currentOrientation = DeviceOrientation(
+                    roll: attitude.roll,
+                    pitch: attitude.pitch,
+                    yaw: attitude.yaw
+                )
+            }
 
             // Create CIImage from pixel buffer
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
@@ -103,8 +156,11 @@ struct ARCameraView: UIViewRepresentable {
             UIGraphicsEndImageContext()
 
             if let image = resizedImage {
+                // Store last frame for freeze functionality
+                lastCapturedFrame = image
+
                 Task { @MainActor in
-                    MultipeerService.shared.sendVideoFrame(image)
+                    MultipeerService.shared.sendVideoFrame(image, orientation: self.currentOrientation)
                 }
             }
         }
@@ -304,6 +360,7 @@ struct ARCameraView: UIViewRepresentable {
         func cleanup() {
             frameTimer?.invalidate()
             frameTimer = nil
+            motionManager.stopDeviceMotionUpdates()
             arView?.session.pause()
         }
 
