@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct NovaidAssistApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var callManager = CallManager.shared
     @StateObject private var userManager = UserManager.shared
 

@@ -65,6 +65,7 @@ struct ProfessionalVideoCallView: View {
         }
         .navigationBarHidden(true)
         .statusBar(hidden: true)
+        .landscapeLock()  // Lock to landscape orientation
         .onTapGesture {
             if !isDrawingMode {
                 toggleControls()
@@ -76,6 +77,7 @@ struct ProfessionalVideoCallView: View {
         }
         .onDisappear {
             controlsTimer?.invalidate()
+            OrientationManager.shared.unlock()
         }
         .alert("End Call", isPresented: $showEndCallAlert) {
             Button("Cancel", role: .cancel) { }

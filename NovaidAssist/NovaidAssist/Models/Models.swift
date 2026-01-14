@@ -160,6 +160,29 @@ struct AnnotationPoint: Codable, Hashable {
     }
 }
 
+// MARK: - World Position (for AR tracking)
+struct WorldPosition: Codable, Hashable {
+    let x: Float
+    let y: Float
+    let z: Float
+
+    init(x: Float, y: Float, z: Float) {
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+
+    init(_ simd: SIMD3<Float>) {
+        self.x = simd.x
+        self.y = simd.y
+        self.z = simd.z
+    }
+
+    var simd: SIMD3<Float> {
+        SIMD3<Float>(x, y, z)
+    }
+}
+
 // MARK: - Annotation
 struct Annotation: Codable, Identifiable {
     let id: String
@@ -172,6 +195,9 @@ struct Annotation: Codable, Identifiable {
     let timestamp: Date
     var isComplete: Bool
 
+    // AR world tracking position (optional)
+    var worldPosition: SIMD3<Float>?
+
     init(
         id: String = UUID().uuidString,
         type: AnnotationType,
@@ -180,7 +206,8 @@ struct Annotation: Codable, Identifiable {
         strokeWidth: CGFloat = 4,
         text: String? = nil,
         animationType: AnimationType? = nil,
-        isComplete: Bool = false
+        isComplete: Bool = false,
+        worldPosition: SIMD3<Float>? = nil
     ) {
         self.id = id
         self.type = type
@@ -191,10 +218,52 @@ struct Annotation: Codable, Identifiable {
         self.animationType = animationType
         self.timestamp = Date()
         self.isComplete = isComplete
+        self.worldPosition = worldPosition
     }
 
     var swiftUIColor: Color {
         Color(hex: color) ?? .red
+    }
+
+    // Custom Codable for SIMD3<Float>
+    enum CodingKeys: String, CodingKey {
+        case id, type, points, color, strokeWidth, text, animationType, timestamp, isComplete, worldPosition
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decode(AnnotationType.self, forKey: .type)
+        points = try container.decode([AnnotationPoint].self, forKey: .points)
+        color = try container.decode(String.self, forKey: .color)
+        strokeWidth = try container.decode(CGFloat.self, forKey: .strokeWidth)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+        animationType = try container.decodeIfPresent(AnimationType.self, forKey: .animationType)
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
+        isComplete = try container.decodeIfPresent(Bool.self, forKey: .isComplete) ?? false
+
+        if let worldPos = try container.decodeIfPresent(WorldPosition.self, forKey: .worldPosition) {
+            worldPosition = worldPos.simd
+        } else {
+            worldPosition = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(type, forKey: .type)
+        try container.encode(points, forKey: .points)
+        try container.encode(color, forKey: .color)
+        try container.encode(strokeWidth, forKey: .strokeWidth)
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encodeIfPresent(animationType, forKey: .animationType)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(isComplete, forKey: .isComplete)
+
+        if let worldPos = worldPosition {
+            try container.encode(WorldPosition(worldPos), forKey: .worldPosition)
+        }
     }
 }
 
