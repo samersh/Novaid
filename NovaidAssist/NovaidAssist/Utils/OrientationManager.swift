@@ -44,13 +44,6 @@ class OrientationManager: ObservableObject {
     }
 }
 
-/// AppDelegate for handling orientation
-class AppDelegate: NSObject, UIApplicationDelegate {
-    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        return OrientationManager.shared.orientationLock
-    }
-}
-
 /// View modifier to lock orientation
 struct LandscapeLockModifier: ViewModifier {
     let isActive: Bool

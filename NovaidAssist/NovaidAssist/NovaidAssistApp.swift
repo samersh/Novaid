@@ -1,4 +1,12 @@
 import SwiftUI
+import UIKit
+
+// MARK: - App Delegate for Orientation Control
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        return OrientationManager.shared.orientationLock
+    }
+}
 
 @main
 struct NovaidAssistApp: App {
