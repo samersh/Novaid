@@ -19,7 +19,7 @@ struct UserVideoCallView: View {
             Color.black.ignoresSafeArea()
 
             // AR Camera with world tracking (replaces regular camera)
-            ARCameraView(annotationManager: arAnnotationManager)
+            ARCameraView(annotationManager: arAnnotationManager, isVideoFrozen: callManager.isVideoFrozen)
                 .ignoresSafeArea()
 
             // AR Annotations overlay (world-tracked positions)

@@ -20,6 +20,8 @@ class MultipeerService: NSObject, ObservableObject {
     @Published var connectionStatus: String = "Disconnected"
     @Published var incomingInvitation: (from: MCPeerID, handler: (Bool, MCSession?) -> Void)?
     @Published var receivedVideoFrame: UIImage?
+    @Published var receivedDeviceOrientation: DeviceOrientation = DeviceOrientation()
+    @Published var frozenFrame: UIImage?
 
     // MARK: - Callbacks
     var onConnected: (() -> Void)?
@@ -32,6 +34,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onVideoFrozen: (() -> Void)?
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
+    var onFrozenFrameReceived: ((UIImage) -> Void)?
 
     // MARK: - Private Properties
     private var peerID: MCPeerID!
@@ -155,8 +158,8 @@ class MultipeerService: NSObject, ObservableObject {
         sendData(data)
     }
 
-    /// Send video frame (compressed JPEG)
-    func sendVideoFrame(_ image: UIImage) {
+    /// Send video frame with orientation (compressed JPEG)
+    func sendVideoFrame(_ image: UIImage, orientation: DeviceOrientation = DeviceOrientation()) {
         // Rate limit to prevent flooding
         let now = Date()
         guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
@@ -167,8 +170,11 @@ class MultipeerService: NSObject, ObservableObject {
         // Compress to JPEG with lower quality for speed
         guard let jpegData = image.jpegData(compressionQuality: 0.3) else { return }
 
-        // Create video frame message
-        let message = MultipeerMessage(type: .videoFrame, payload: jpegData)
+        // Create video frame with orientation message
+        let frameData = VideoFrameData(imageData: jpegData, orientation: orientation)
+        guard let framePayload = try? JSONEncoder().encode(frameData) else { return }
+
+        let message = MultipeerMessage(type: .videoFrameWithOrientation, payload: framePayload)
         guard let data = try? JSONEncoder().encode(message) else { return }
 
         // Send unreliable for speed (like UDP)
@@ -176,6 +182,24 @@ class MultipeerService: NSObject, ObservableObject {
             try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
         } catch {
             // Silently fail for video frames
+        }
+    }
+
+    /// Send frozen frame (compressed JPEG)
+    func sendFrozenFrame(_ image: UIImage) {
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        // Compress to JPEG with higher quality for frozen frame
+        guard let jpegData = image.jpegData(compressionQuality: 0.7) else { return }
+
+        let message = MultipeerMessage(type: .frozenFrame, payload: jpegData)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+
+        // Send reliably
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        } catch {
+            print("[Multipeer] Failed to send frozen frame: \(error)")
         }
     }
 
@@ -320,6 +344,23 @@ extension MultipeerService: MCSessionDelegate {
                     self.receivedVideoFrame = image
                     self.onVideoFrameReceived?(image)
                 }
+
+            case .videoFrameWithOrientation:
+                if let payload = message.payload,
+                   let frameData = try? JSONDecoder().decode(VideoFrameData.self, from: payload),
+                   let image = UIImage(data: frameData.imageData) {
+                    self.receivedVideoFrame = image
+                    self.receivedDeviceOrientation = frameData.orientation
+                    self.onVideoFrameReceived?(image)
+                }
+
+            case .frozenFrame:
+                if let payload = message.payload,
+                   let image = UIImage(data: payload) {
+                    self.frozenFrame = image
+                    self.onFrozenFrameReceived?(image)
+                    print("[Multipeer] Received frozen frame")
+                }
             }
         }
     }
@@ -415,8 +456,29 @@ struct MultipeerMessage: Codable {
         case freezeVideo
         case resumeVideo
         case videoFrame
+        case videoFrameWithOrientation
+        case frozenFrame
     }
 
     let type: MessageType
     let payload: Data?
+}
+
+// MARK: - Device Orientation Data
+struct DeviceOrientation: Codable {
+    var roll: Double = 0.0    // Rotation around longitudinal axis
+    var pitch: Double = 0.0   // Rotation around lateral axis
+    var yaw: Double = 0.0     // Rotation around vertical axis
+
+    init(roll: Double = 0.0, pitch: Double = 0.0, yaw: Double = 0.0) {
+        self.roll = roll
+        self.pitch = pitch
+        self.yaw = yaw
+    }
+}
+
+// MARK: - Video Frame Data with Orientation
+struct VideoFrameData: Codable {
+    let imageData: Data
+    let orientation: DeviceOrientation
 }
