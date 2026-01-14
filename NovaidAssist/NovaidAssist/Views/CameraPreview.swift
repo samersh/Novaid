@@ -207,11 +207,26 @@ struct RemoteVideoView: View {
 
                 // Show frozen frame if available, otherwise show live frame
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
-                    // Rotate video content 90° clockwise to correct orientation on iPad
+                    let orientation = multipeerService.receivedDeviceOrientation.state
+
+                    // Determine rotation based on iPhone orientation
+                    let rotationAngle: Double
+                    switch orientation {
+                    case .landscapeRight, .landscapeLeft:
+                        // iPhone is landscape → iPad shows landscape (no rotation)
+                        rotationAngle = 0
+                    case .portrait, .portraitUpsideDown:
+                        // iPhone is portrait → iPad rotates 90° to show portrait
+                        rotationAngle = 90
+                    case .unknown:
+                        // Default to no rotation
+                        rotationAngle = 0
+                    }
+
                     Image(uiImage: frame)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .rotationEffect(.degrees(90))  // Rotate content 90° clockwise
+                        .rotationEffect(.degrees(rotationAngle))
                         .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     VStack(spacing: 16) {
