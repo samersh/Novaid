@@ -142,10 +142,30 @@ struct ARCameraView: UIViewRepresentable {
             // Create CIImage from pixel buffer
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-            // Get device orientation to determine correct rotation
-            // ARKit camera always captures in native sensor orientation
-            // For landscape right: rotate 90° counter-clockwise
-            let rotatedImage = ciImage.oriented(.right)
+            // ARKit captures in portrait orientation (sensor native)
+            // Determine target size based on device orientation
+            let isPortrait = (orientationState == .portrait || orientationState == .portraitUpsideDown)
+            let targetSize = isPortrait ? CGSize(width: 480, height: 854) : CGSize(width: 854, height: 480)
+
+            // Rotate based on current orientation to match what user sees on screen
+            let rotatedImage: CIImage
+            switch orientationState {
+            case .landscapeRight:
+                // Landscape right: rotate 90° counter-clockwise
+                rotatedImage = ciImage.oriented(.right)
+            case .landscapeLeft:
+                // Landscape left: rotate 90° clockwise
+                rotatedImage = ciImage.oriented(.left)
+            case .portrait:
+                // Portrait: no rotation needed (sensor is already portrait)
+                rotatedImage = ciImage.oriented(.up)
+            case .portraitUpsideDown:
+                // Portrait upside down: rotate 180°
+                rotatedImage = ciImage.oriented(.down)
+            case .unknown:
+                // Default to landscape right
+                rotatedImage = ciImage.oriented(.right)
+            }
 
             let context = CIContext(options: [.useSoftwareRenderer: false])
             guard let cgImage = context.createCGImage(rotatedImage, from: rotatedImage.extent) else { return }
@@ -153,8 +173,7 @@ struct ARCameraView: UIViewRepresentable {
             // Create UIImage
             let uiImage = UIImage(cgImage: cgImage)
 
-            // Resize to landscape dimensions (16:9)
-            let targetSize = CGSize(width: 854, height: 480)
+            // Resize to target dimensions
             UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
             uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()

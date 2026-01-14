@@ -199,7 +199,6 @@ class CameraPreviewUIView: UIView {
 /// View to display received video frames from remote peer
 struct RemoteVideoView: View {
     @ObservedObject var multipeerService = MultipeerService.shared
-    var videoAspectRatio: CGFloat = 16.0 / 9.0  // Landscape video
 
     var body: some View {
         GeometryReader { geometry in
@@ -208,19 +207,12 @@ struct RemoteVideoView: View {
 
                 // Show frozen frame if available, otherwise show live frame
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
-                    // Calculate the frame size to fit while maintaining aspect ratio
-                    let videoFrame = calculateVideoFrame(containerSize: geometry.size, aspectRatio: videoAspectRatio)
-
-                    // Calculate rotation angle from device orientation
-                    let rotationAngle = calculateRotationAngle(from: multipeerService.receivedDeviceOrientation)
-
+                    // Video is already correctly oriented by the iPhone
+                    // Just display it with proper aspect ratio fitting
                     Image(uiImage: frame)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: videoFrame.width, height: videoFrame.height)
-                        .rotationEffect(rotationAngle)
-                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                        .animation(.easeInOut(duration: 0.1), value: rotationAngle)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -233,29 +225,6 @@ struct RemoteVideoView: View {
                     }
                 }
             }
-        }
-    }
-
-    /// Calculate rotation angle from device orientation state
-    /// This ensures the video on iPad matches the physical orientation of the iPhone
-    private func calculateRotationAngle(from orientation: DeviceOrientation) -> Angle {
-        // Map discrete orientation states to rotation angles
-        switch orientation.state {
-        case .portrait:
-            // Portrait: rotate 90° clockwise (video needs to be upright)
-            return Angle(degrees: 90)
-        case .portraitUpsideDown:
-            // Portrait upside down: rotate 270° clockwise (or -90°)
-            return Angle(degrees: -90)
-        case .landscapeLeft:
-            // Landscape left: rotate 180°
-            return Angle(degrees: 180)
-        case .landscapeRight:
-            // Landscape right: no rotation (default orientation)
-            return Angle(degrees: 0)
-        case .unknown:
-            // Unknown: keep default (no rotation)
-            return Angle(degrees: 0)
         }
     }
 
