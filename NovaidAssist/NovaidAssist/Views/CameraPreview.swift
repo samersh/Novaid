@@ -209,9 +209,10 @@ struct RemoteVideoView: View {
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
                     Image(uiImage: frame)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .aspectRatio(contentMode: .fill)
                         .rotationEffect(.degrees(rotationAngle))
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -233,11 +234,11 @@ struct RemoteVideoView: View {
 
         switch orientation {
         case .landscapeRight, .landscapeLeft:
-            // iPhone is landscape → iPad shows landscape (no rotation)
-            return 0
-        case .portrait, .portraitUpsideDown:
-            // iPhone is portrait → iPad rotates 90° to show portrait
+            // iPhone is landscape → Rotate content 90° clockwise on iPad
             return 90
+        case .portrait, .portraitUpsideDown:
+            // iPhone is portrait → iPad shows as-is (no rotation)
+            return 0
         case .unknown:
             // Default to no rotation
             return 0
