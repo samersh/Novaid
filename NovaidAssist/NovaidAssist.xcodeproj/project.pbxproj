@@ -26,6 +26,7 @@
 		APP017 /* DrawingCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC016 /* DrawingCanvas.swift */; };
 		APP018 /* CameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC017 /* CameraPreview.swift */; };
 		APP019 /* Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC018 /* Extensions.swift */; };
+		APP020 /* MultipeerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC019 /* MultipeerService.swift */; };
 		TST001 /* NovaidAssistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TST002 /* NovaidAssistTests.swift */; };
 		UTT001 /* NovaidAssistUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UTT002 /* NovaidAssistUITests.swift */; };
 /* End PBXBuildFile section */
@@ -66,6 +67,7 @@
 		SRC016 /* DrawingCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingCanvas.swift; sourceTree = "<group>"; };
 		SRC017 /* CameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreview.swift; sourceTree = "<group>"; };
 		SRC018 /* Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Extensions.swift; sourceTree = "<group>"; };
+		SRC019 /* MultipeerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipeerService.swift; sourceTree = "<group>"; };
 		RES001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		RES002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		PRD001 /* NovaidAssist.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NovaidAssist.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -165,6 +167,7 @@
 				SRC011 /* AnnotationService.swift */,
 				SRC012 /* UserManager.swift */,
 				SRC013 /* CallManager.swift */,
+				SRC019 /* MultipeerService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -358,6 +361,7 @@
 				APP017 /* DrawingCanvas.swift in Sources */,
 				APP018 /* CameraPreview.swift in Sources */,
 				APP019 /* Extensions.swift in Sources */,
+				APP020 /* MultipeerService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
