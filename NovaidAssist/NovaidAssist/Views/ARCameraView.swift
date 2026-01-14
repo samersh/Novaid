@@ -385,16 +385,169 @@ struct ARAnnotationOverlayView: View {
         GeometryReader { geometry in
             ZStack {
                 ForEach(annotations) { annotation in
-                    if annotation.isVisible, let screenPos = annotation.currentScreenPosition {
-                        ARAnnotationMarker(
+                    if annotation.isVisible {
+                        ARAnnotationShapeView(
                             annotation: annotation,
-                            position: screenPos.toAbsolute(in: geometry.size)
+                            containerSize: geometry.size
                         )
                     }
                 }
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+// MARK: - AR Annotation Shape View (renders full annotation shapes)
+
+struct ARAnnotationShapeView: View {
+    let annotation: ARTrackedAnnotation
+    let containerSize: CGSize
+
+    var body: some View {
+        // Use current tracked screen position if available, otherwise use original points
+        let baseOffset = calculateBaseOffset()
+
+        switch annotation.type {
+        case .drawing:
+            ARDrawingPath(annotation: annotation, containerSize: containerSize, offset: baseOffset)
+                .stroke(
+                    annotation.swiftUIColor,
+                    style: StrokeStyle(
+                        lineWidth: annotation.strokeWidth,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
+
+        case .arrow:
+            if annotation.points.count >= 2 {
+                let start = annotation.points[0].toAbsolute(in: containerSize).offset(by: baseOffset)
+                let end = annotation.points[1].toAbsolute(in: containerSize).offset(by: baseOffset)
+                ARArrowShape(start: start, end: end)
+                    .stroke(annotation.swiftUIColor, lineWidth: annotation.strokeWidth)
+            }
+
+        case .circle:
+            if annotation.points.count >= 2 {
+                let center = annotation.points[0].toAbsolute(in: containerSize).offset(by: baseOffset)
+                let radiusNormalized = annotation.points[1].x
+                let radius = radiusNormalized * containerSize.width
+
+                Circle()
+                    .stroke(annotation.swiftUIColor, lineWidth: annotation.strokeWidth)
+                    .frame(width: radius * 2, height: radius * 2)
+                    .position(center)
+            }
+
+        case .pointer, .animation:
+            if let screenPos = annotation.currentScreenPosition {
+                let position = screenPos.toAbsolute(in: containerSize)
+                ARAnnotationMarker(
+                    annotation: annotation,
+                    position: position
+                )
+            } else if let point = annotation.points.first {
+                let position = point.toAbsolute(in: containerSize).offset(by: baseOffset)
+                ARAnnotationMarker(
+                    annotation: annotation,
+                    position: position
+                )
+            }
+
+        case .text:
+            if let point = annotation.points.first,
+               let text = annotation.text {
+                let position = point.toAbsolute(in: containerSize).offset(by: baseOffset)
+                Text(text)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(annotation.swiftUIColor)
+                    .position(position)
+            }
+        }
+    }
+
+    private func calculateBaseOffset() -> CGPoint {
+        // Calculate offset from original first point to current tracked position
+        guard let currentPos = annotation.currentScreenPosition,
+              let originalFirst = annotation.points.first else {
+            return .zero
+        }
+
+        let currentAbsolute = currentPos.toAbsolute(in: containerSize)
+        let originalAbsolute = originalFirst.toAbsolute(in: containerSize)
+
+        return CGPoint(
+            x: currentAbsolute.x - originalAbsolute.x,
+            y: currentAbsolute.y - originalAbsolute.y
+        )
+    }
+}
+
+// MARK: - AR Drawing Path
+
+struct ARDrawingPath: Shape {
+    let annotation: ARTrackedAnnotation
+    let containerSize: CGSize
+    let offset: CGPoint
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+
+        guard let first = annotation.points.first else { return path }
+
+        let firstAbsolute = first.toAbsolute(in: containerSize).offset(by: offset)
+        path.move(to: firstAbsolute)
+
+        for point in annotation.points.dropFirst() {
+            let absolutePoint = point.toAbsolute(in: containerSize).offset(by: offset)
+            path.addLine(to: absolutePoint)
+        }
+
+        return path
+    }
+}
+
+// MARK: - AR Arrow Shape
+
+struct ARArrowShape: Shape {
+    let start: CGPoint
+    let end: CGPoint
+    let headLength: CGFloat = 20
+    let headAngle: CGFloat = .pi / 6
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+
+        path.move(to: start)
+        path.addLine(to: end)
+
+        let angle = atan2(end.y - start.y, end.x - start.x)
+
+        let arrowPoint1 = CGPoint(
+            x: end.x - headLength * cos(angle - headAngle),
+            y: end.y - headLength * sin(angle - headAngle)
+        )
+
+        let arrowPoint2 = CGPoint(
+            x: end.x - headLength * cos(angle + headAngle),
+            y: end.y - headLength * sin(angle + headAngle)
+        )
+
+        path.move(to: end)
+        path.addLine(to: arrowPoint1)
+        path.move(to: end)
+        path.addLine(to: arrowPoint2)
+
+        return path
+    }
+}
+
+// MARK: - CGPoint Extension for Offset
+
+extension CGPoint {
+    func offset(by point: CGPoint) -> CGPoint {
+        return CGPoint(x: self.x + point.x, y: self.y + point.y)
     }
 }
 

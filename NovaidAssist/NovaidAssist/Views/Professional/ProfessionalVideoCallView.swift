@@ -10,6 +10,7 @@ struct ProfessionalVideoCallView: View {
     @State private var isAudioEnabled = true
     @State private var showEndCallAlert = false
     @State private var controlsTimer: Timer?
+    @State private var videoRotation: Double = 0  // 0, 90, 180, 270 degrees
 
     var body: some View {
         GeometryReader { geometry in
@@ -17,34 +18,41 @@ struct ProfessionalVideoCallView: View {
                 // Video background
                 Color.black.ignoresSafeArea()
 
-                // Calculate video frame bounds
-                let videoFrame = VideoFrameHelper.calculateVideoFrame(containerSize: geometry.size)
+                // Calculate video frame based on rotation
+                let isRotated90or270 = (Int(videoRotation) % 180) != 0
+                let baseAspectRatio: CGFloat = 16.0 / 9.0
+                let effectiveAspectRatio = isRotated90or270 ? (1.0 / baseAspectRatio) : baseAspectRatio
+                let videoFrame = VideoFrameHelper.calculateVideoFrame(
+                    containerSize: geometry.size,
+                    aspectRatio: effectiveAspectRatio
+                )
 
-                // Remote video from User's iPhone camera
-                RemoteVideoView()
-                    .ignoresSafeArea()
+                // Video + Annotations + Drawing container (rotated together)
+                ZStack {
+                    // Remote video from User's iPhone camera
+                    RemoteVideoView(videoAspectRatio: baseAspectRatio)
 
-                // Annotations overlay - constrained to video area
-                AnnotationOverlayView(annotations: callManager.annotations)
-                    .frame(width: videoFrame.width, height: videoFrame.height)
-                    .position(x: videoFrame.midX, y: videoFrame.midY)
+                    // Annotations overlay - constrained to video area
+                    AnnotationOverlayView(annotations: callManager.annotations)
 
-                // Drawing canvas (when in drawing mode) - constrained to video area
-                if isDrawingMode {
-                    DrawingCanvasView(
-                        annotationService: callManager.annotationService,
-                        onAnnotationCreated: { annotation in
-                            callManager.annotations.append(annotation)
-                            // Send via multipeer if connected
-                            if multipeerService.isConnected {
-                                multipeerService.sendAnnotation(annotation)
-                                print("[Professional] Sent annotation to user")
+                    // Drawing canvas (when in drawing mode) - constrained to video area
+                    if isDrawingMode {
+                        DrawingCanvasView(
+                            annotationService: callManager.annotationService,
+                            onAnnotationCreated: { annotation in
+                                callManager.annotations.append(annotation)
+                                // Send via multipeer if connected
+                                if multipeerService.isConnected {
+                                    multipeerService.sendAnnotation(annotation)
+                                    print("[Professional] Sent annotation to user")
+                                }
                             }
-                        }
-                    )
-                    .frame(width: videoFrame.width, height: videoFrame.height)
-                    .position(x: videoFrame.midX, y: videoFrame.midY)
+                        )
+                    }
                 }
+                .frame(width: videoFrame.width, height: videoFrame.height)
+                .rotationEffect(.degrees(videoRotation))
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
 
                 // Frozen badge
                 if callManager.isVideoFrozen {
@@ -292,6 +300,13 @@ struct ProfessionalVideoCallView: View {
                 action: toggleDrawingMode
             )
 
+            // Rotate video button
+            ControlButton(
+                icon: "rotate.right",
+                isActive: videoRotation != 0,
+                action: rotateVideo
+            )
+
             // End call button
             Button(action: { showEndCallAlert = true }) {
                 ZStack {
@@ -360,6 +375,12 @@ struct ProfessionalVideoCallView: View {
             showControls = true
         } else {
             startControlsTimer()
+        }
+    }
+
+    private func rotateVideo() {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            videoRotation = (videoRotation + 90).truncatingRemainder(dividingBy: 360)
         }
     }
 
