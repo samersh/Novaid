@@ -106,23 +106,57 @@ enum AnimationType: String, Codable {
     case highlight
 }
 
-// MARK: - Point
+// MARK: - Point (Normalized 0-1 coordinates for cross-device compatibility)
 struct AnnotationPoint: Codable, Hashable {
     let x: CGFloat
     let y: CGFloat
 
-    init(x: CGFloat, y: CGFloat) {
+    // Whether coordinates are normalized (0-1 range) or absolute
+    var isNormalized: Bool = true
+
+    init(x: CGFloat, y: CGFloat, normalized: Bool = true) {
         self.x = x
         self.y = y
+        self.isNormalized = normalized
     }
 
-    init(_ point: CGPoint) {
+    init(_ point: CGPoint, normalized: Bool = true) {
         self.x = point.x
         self.y = point.y
+        self.isNormalized = normalized
+    }
+
+    // Create from absolute coordinates, normalizing to 0-1 range
+    static func normalized(from point: CGPoint, in size: CGSize) -> AnnotationPoint {
+        return AnnotationPoint(
+            x: point.x / size.width,
+            y: point.y / size.height,
+            normalized: true
+        )
+    }
+
+    // Convert to absolute coordinates for a given screen size
+    func toAbsolute(in size: CGSize) -> CGPoint {
+        if isNormalized {
+            return CGPoint(x: x * size.width, y: y * size.height)
+        } else {
+            return CGPoint(x: x, y: y)
+        }
     }
 
     var cgPoint: CGPoint {
         CGPoint(x: x, y: y)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case x, y, isNormalized
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        x = try container.decode(CGFloat.self, forKey: .x)
+        y = try container.decode(CGFloat.self, forKey: .y)
+        isNormalized = try container.decodeIfPresent(Bool.self, forKey: .isNormalized) ?? true
     }
 }
 

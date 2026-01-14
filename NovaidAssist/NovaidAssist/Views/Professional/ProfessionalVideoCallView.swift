@@ -26,8 +26,18 @@ struct ProfessionalVideoCallView: View {
 
             // Drawing canvas (when in drawing mode)
             if isDrawingMode {
-                DrawingCanvasView(annotationService: callManager.annotationService)
-                    .ignoresSafeArea()
+                DrawingCanvasView(
+                    annotationService: callManager.annotationService,
+                    onAnnotationCreated: { annotation in
+                        callManager.annotations.append(annotation)
+                        // Send via multipeer if connected
+                        if multipeerService.isConnected {
+                            multipeerService.sendAnnotation(annotation)
+                            print("[Professional] Sent annotation to user")
+                        }
+                    }
+                )
+                .ignoresSafeArea()
             }
 
             // Frozen badge
@@ -286,14 +296,8 @@ struct ProfessionalVideoCallView: View {
 
     // MARK: - Actions
     private func setupAnnotationCallback() {
-        // When an annotation is created locally, send it to the user
-        callManager.annotationService.onAnnotationCreated = { [self] annotation in
-            callManager.annotations.append(annotation)
-            // Send via multipeer if connected
-            if multipeerService.isConnected {
-                multipeerService.sendAnnotation(annotation)
-            }
-        }
+        // Setup is now done via onAnnotationCreated callback in DrawingCanvasView
+        // This method remains for any additional setup if needed
     }
 
     private func toggleControls() {

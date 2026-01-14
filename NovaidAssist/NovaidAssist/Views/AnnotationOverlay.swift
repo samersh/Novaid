@@ -7,9 +7,9 @@ struct AnnotationOverlayView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Render each annotation
+                // Render each annotation with geometry for coordinate conversion
                 ForEach(annotations) { annotation in
-                    AnnotationShape(annotation: annotation)
+                    AnnotationShape(annotation: annotation, containerSize: geometry.size)
                 }
             }
         }
@@ -20,11 +20,12 @@ struct AnnotationOverlayView: View {
 /// Shape view for individual annotation
 struct AnnotationShape: View {
     let annotation: Annotation
+    let containerSize: CGSize
 
     var body: some View {
         switch annotation.type {
         case .drawing:
-            DrawingPath(points: annotation.points)
+            DrawingPath(points: annotation.points, containerSize: containerSize)
                 .stroke(
                     annotation.swiftUIColor,
                     style: StrokeStyle(
@@ -36,17 +37,18 @@ struct AnnotationShape: View {
 
         case .arrow:
             if annotation.points.count >= 2 {
-                ArrowShape(
-                    start: annotation.points[0].cgPoint,
-                    end: annotation.points[1].cgPoint
-                )
-                .stroke(annotation.swiftUIColor, lineWidth: annotation.strokeWidth)
+                let start = annotation.points[0].toAbsolute(in: containerSize)
+                let end = annotation.points[1].toAbsolute(in: containerSize)
+                ArrowShape(start: start, end: end)
+                    .stroke(annotation.swiftUIColor, lineWidth: annotation.strokeWidth)
             }
 
         case .circle:
             if annotation.points.count >= 2 {
-                let center = annotation.points[0].cgPoint
-                let radius = annotation.points[1].x
+                let center = annotation.points[0].toAbsolute(in: containerSize)
+                // Radius is stored as normalized relative to width
+                let radiusNormalized = annotation.points[1].x
+                let radius = radiusNormalized * containerSize.width
 
                 Circle()
                     .stroke(annotation.swiftUIColor, lineWidth: annotation.strokeWidth)
@@ -56,8 +58,9 @@ struct AnnotationShape: View {
 
         case .pointer, .animation:
             if let point = annotation.points.first {
+                let absolutePoint = point.toAbsolute(in: containerSize)
                 AnimatedPointer(
-                    position: point.cgPoint,
+                    position: absolutePoint,
                     color: annotation.swiftUIColor,
                     animationType: annotation.animationType ?? .pulse
                 )
@@ -66,10 +69,11 @@ struct AnnotationShape: View {
         case .text:
             if let point = annotation.points.first,
                let text = annotation.text {
+                let absolutePoint = point.toAbsolute(in: containerSize)
                 Text(text)
                     .font(.system(size: 16, weight: .bold))
                     .foregroundColor(annotation.swiftUIColor)
-                    .position(point.cgPoint)
+                    .position(absolutePoint)
             }
         }
     }
@@ -78,16 +82,20 @@ struct AnnotationShape: View {
 /// Path for freehand drawing
 struct DrawingPath: Shape {
     let points: [AnnotationPoint]
+    let containerSize: CGSize
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
 
         guard let first = points.first else { return path }
 
-        path.move(to: first.cgPoint)
+        // Convert normalized coordinates to absolute
+        let firstAbsolute = first.toAbsolute(in: containerSize)
+        path.move(to: firstAbsolute)
 
         for point in points.dropFirst() {
-            path.addLine(to: point.cgPoint)
+            let absolutePoint = point.toAbsolute(in: containerSize)
+            path.addLine(to: absolutePoint)
         }
 
         return path
@@ -187,31 +195,31 @@ struct AnimatedPointer: View {
             Annotation(
                 type: .drawing,
                 points: [
-                    AnnotationPoint(x: 50, y: 100),
-                    AnnotationPoint(x: 100, y: 150),
-                    AnnotationPoint(x: 150, y: 100)
+                    AnnotationPoint(x: 0.1, y: 0.2, normalized: true),
+                    AnnotationPoint(x: 0.2, y: 0.3, normalized: true),
+                    AnnotationPoint(x: 0.3, y: 0.2, normalized: true)
                 ],
                 color: "#FF0000"
             ),
             Annotation(
                 type: .arrow,
                 points: [
-                    AnnotationPoint(x: 200, y: 200),
-                    AnnotationPoint(x: 300, y: 300)
+                    AnnotationPoint(x: 0.4, y: 0.4, normalized: true),
+                    AnnotationPoint(x: 0.6, y: 0.6, normalized: true)
                 ],
                 color: "#00FF00"
             ),
             Annotation(
                 type: .circle,
                 points: [
-                    AnnotationPoint(x: 200, y: 400),
-                    AnnotationPoint(x: 50, y: 50)
+                    AnnotationPoint(x: 0.5, y: 0.7, normalized: true),
+                    AnnotationPoint(x: 0.1, y: 0.1, normalized: true)  // radius
                 ],
                 color: "#0000FF"
             ),
             Annotation(
                 type: .pointer,
-                points: [AnnotationPoint(x: 300, y: 500)],
+                points: [AnnotationPoint(x: 0.7, y: 0.8, normalized: true)],
                 color: "#FFFF00",
                 animationType: .pulse
             )

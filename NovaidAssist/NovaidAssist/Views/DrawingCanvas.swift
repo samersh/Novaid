@@ -3,12 +3,18 @@ import SwiftUI
 /// Canvas view for drawing annotations
 struct DrawingCanvasView: View {
     @ObservedObject var annotationService: AnnotationService
+    var onAnnotationCreated: ((Annotation) -> Void)?
+
     @State private var currentPoints: [CGPoint] = []
     @State private var startPoint: CGPoint?
+    @State private var canvasSize: CGSize = .zero
 
     var body: some View {
         GeometryReader { geometry in
             ZStack {
+                // Transparent overlay to capture touches
+                Color.clear
+
                 // Current drawing preview
                 if !currentPoints.isEmpty && annotationService.selectedTool == .pen {
                     CurrentDrawingPath(points: currentPoints)
@@ -48,19 +54,17 @@ struct DrawingCanvasView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        canvasSize = geometry.size
                         handleDrag(value, in: geometry.size)
                     }
                     .onEnded { value in
+                        canvasSize = geometry.size
                         handleDragEnd(value, in: geometry.size)
                     }
             )
-            .simultaneousGesture(
-                TapGesture()
-                    .onEnded { _ in
-                        // Handle tap for pointer tool
-                        // Location will come from drag gesture
-                    }
-            )
+            .onAppear {
+                canvasSize = geometry.size
+            }
         }
     }
 
@@ -69,11 +73,7 @@ struct DrawingCanvasView: View {
 
         switch annotationService.selectedTool {
         case .pen:
-            if currentPoints.isEmpty {
-                annotationService.startDrawing(at: location)
-            }
             currentPoints.append(location)
-            annotationService.continueDrawing(to: location)
 
         case .arrow, .circle:
             if startPoint == nil {
@@ -82,7 +82,7 @@ struct DrawingCanvasView: View {
             currentPoints = [location]
 
         case .pointer:
-            // Pointer creates on tap, handled in onEnded
+            // Pointer creates on tap end
             break
         }
     }
@@ -92,12 +92,42 @@ struct DrawingCanvasView: View {
 
         switch annotationService.selectedTool {
         case .pen:
-            annotationService.endDrawing()
+            if currentPoints.count >= 2 {
+                // Create annotation with normalized coordinates
+                let normalizedPoints = currentPoints.map { point in
+                    AnnotationPoint.normalized(from: point, in: size)
+                }
+
+                let annotation = Annotation(
+                    type: .drawing,
+                    points: normalizedPoints,
+                    color: annotationService.selectedColor.toHex() ?? "#FF0000",
+                    strokeWidth: annotationService.strokeWidth,
+                    isComplete: true
+                )
+
+                annotationService.annotations.append(annotation)
+                onAnnotationCreated?(annotation)
+                print("[Drawing] Created pen annotation with \(normalizedPoints.count) points")
+            }
             currentPoints.removeAll()
 
         case .arrow:
             if let start = startPoint {
-                annotationService.createArrow(from: start, to: location)
+                let normalizedStart = AnnotationPoint.normalized(from: start, in: size)
+                let normalizedEnd = AnnotationPoint.normalized(from: location, in: size)
+
+                let annotation = Annotation(
+                    type: .arrow,
+                    points: [normalizedStart, normalizedEnd],
+                    color: annotationService.selectedColor.toHex() ?? "#FF0000",
+                    strokeWidth: annotationService.strokeWidth,
+                    isComplete: true
+                )
+
+                annotationService.annotations.append(annotation)
+                onAnnotationCreated?(annotation)
+                print("[Drawing] Created arrow annotation")
             }
             startPoint = nil
             currentPoints.removeAll()
@@ -105,13 +135,40 @@ struct DrawingCanvasView: View {
         case .circle:
             if let start = startPoint {
                 let radius = hypot(location.x - start.x, location.y - start.y)
-                annotationService.createCircle(center: start, radius: radius)
+                let normalizedCenter = AnnotationPoint.normalized(from: start, in: size)
+                // Store radius as normalized (relative to width)
+                let normalizedRadius = AnnotationPoint(x: radius / size.width, y: radius / size.width, normalized: true)
+
+                let annotation = Annotation(
+                    type: .circle,
+                    points: [normalizedCenter, normalizedRadius],
+                    color: annotationService.selectedColor.toHex() ?? "#FF0000",
+                    strokeWidth: annotationService.strokeWidth,
+                    isComplete: true
+                )
+
+                annotationService.annotations.append(annotation)
+                onAnnotationCreated?(annotation)
+                print("[Drawing] Created circle annotation")
             }
             startPoint = nil
             currentPoints.removeAll()
 
         case .pointer:
-            annotationService.createPointer(at: location)
+            let normalizedPoint = AnnotationPoint.normalized(from: location, in: size)
+
+            let annotation = Annotation(
+                type: .pointer,
+                points: [normalizedPoint],
+                color: annotationService.selectedColor.toHex() ?? "#FF0000",
+                strokeWidth: annotationService.strokeWidth,
+                animationType: .pulse,
+                isComplete: true
+            )
+
+            annotationService.annotations.append(annotation)
+            onAnnotationCreated?(annotation)
+            print("[Drawing] Created pointer annotation")
         }
     }
 }

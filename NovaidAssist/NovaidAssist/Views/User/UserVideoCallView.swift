@@ -42,6 +42,7 @@ struct UserVideoCallView: View {
         }
         .onAppear {
             startControlsTimer()
+            setupAnnotationCallbacks()
         }
         .onDisappear {
             controlsTimer?.invalidate()
@@ -182,6 +183,27 @@ struct UserVideoCallView: View {
     }
 
     // MARK: - Actions
+    private func setupAnnotationCallbacks() {
+        // Receive annotations from professional
+        multipeerService.onAnnotationReceived = { [self] annotation in
+            callManager.annotations.append(annotation)
+            print("[User] Received annotation from professional")
+        }
+
+        // Handle video freeze command
+        multipeerService.onVideoFrozen = { [self] in
+            callManager.isVideoFrozen = true
+            print("[User] Video frozen by professional")
+        }
+
+        // Handle video resume command with annotations
+        multipeerService.onVideoResumed = { [self] annotations in
+            callManager.isVideoFrozen = false
+            callManager.annotations = annotations
+            print("[User] Video resumed with \(annotations.count) annotations")
+        }
+    }
+
     private func toggleControls() {
         withAnimation(.easeInOut(duration: 0.3)) {
             showControls.toggle()
