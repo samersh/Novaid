@@ -2,6 +2,8 @@ import SwiftUI
 import AVFoundation
 
 struct UserVideoCallView: View {
+    @StateObject private var multipeerService = MultipeerService.shared
+    @StateObject private var arAnnotationManager = ARAnnotationManager()
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -16,12 +18,12 @@ struct UserVideoCallView: View {
             // Video background
             Color.black.ignoresSafeArea()
 
-            // Camera preview
-            CameraPreviewView()
+            // AR Camera with world tracking (replaces regular camera)
+            ARCameraView(annotationManager: arAnnotationManager)
                 .ignoresSafeArea()
 
-            // AR Annotations overlay
-            AnnotationOverlayView(annotations: callManager.annotations)
+            // AR Annotations overlay (world-tracked positions)
+            ARAnnotationOverlayView(annotations: arAnnotationManager.annotations)
                 .ignoresSafeArea()
 
             // Frozen video indicator
@@ -29,21 +31,28 @@ struct UserVideoCallView: View {
                 frozenVideoOverlay
             }
 
-            // Controls overlay
+            // Controls overlay (landscape-optimized)
             if showControls {
-                controlsOverlay
+                landscapeControlsOverlay
             }
         }
         .navigationBarHidden(true)
         .statusBar(hidden: true)
+        .landscapeLock()  // Lock to landscape orientation
         .onTapGesture {
             toggleControls()
         }
         .onAppear {
+            // Keep screen awake during call
+            UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
+            setupAnnotationCallbacks()
         }
         .onDisappear {
+            // Re-enable screen sleep
+            UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
+            OrientationManager.shared.unlock()
         }
         .alert("End Call", isPresented: $showEndCallAlert) {
             Button("Cancel", role: .cancel) { }
@@ -53,8 +62,8 @@ struct UserVideoCallView: View {
         } message: {
             Text("Are you sure you want to end this call?")
         }
-        .onChange(of: callManager.callState) { oldValue, newValue in
-            if newValue == .disconnected || newValue == .failed || newValue == .idle {
+        .onChange(of: multipeerService.isConnected) { newValue in
+            if !newValue && callManager.callState == .connected {
                 dismiss()
             }
         }
@@ -83,56 +92,78 @@ struct UserVideoCallView: View {
         }
     }
 
-    // MARK: - Controls Overlay
-    private var controlsOverlay: some View {
-        VStack {
-            // Top bar
-            topBar
-                .padding(.top, 50)
+    // MARK: - Landscape Controls Overlay
+    private var landscapeControlsOverlay: some View {
+        HStack {
+            // Left side - Status
+            VStack(alignment: .leading) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 10, height: 10)
+
+                    Text(callStatusText)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                }
                 .padding(.horizontal, 20)
-                .background(
-                    LinearGradient(
-                        colors: [Color.black.opacity(0.6), Color.clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .ignoresSafeArea()
-                )
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(20)
+
+                Spacer()
+            }
+            .padding(.leading, 40)
+            .padding(.top, 20)
 
             Spacer()
 
-            // Bottom controls
-            bottomControls
-                .padding(.bottom, 40)
-                .padding(.horizontal, 20)
-                .background(
-                    LinearGradient(
-                        colors: [Color.clear, Color.black.opacity(0.6)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .ignoresSafeArea()
+            // Right side - Controls (vertical stack for landscape)
+            VStack(spacing: 20) {
+                Spacer()
+
+                // Mute button
+                ControlButton(
+                    icon: isAudioEnabled ? "mic.fill" : "mic.slash.fill",
+                    isActive: !isAudioEnabled,
+                    action: toggleAudio
                 )
+
+                // End call button
+                Button(action: { showEndCallAlert = true }) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 70, height: 70)
+
+                        Image(systemName: "phone.down.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white)
+                    }
+                }
+
+                // Video toggle button
+                ControlButton(
+                    icon: isVideoEnabled ? "video.fill" : "video.slash.fill",
+                    isActive: !isVideoEnabled,
+                    action: toggleVideo
+                )
+
+                Spacer()
+            }
+            .padding(.trailing, 40)
+            .padding(.vertical, 20)
+            .background(
+                LinearGradient(
+                    colors: [Color.clear, Color.black.opacity(0.4)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 120)
+                .ignoresSafeArea()
+            )
         }
         .transition(.opacity)
-    }
-
-    // MARK: - Top Bar
-    private var topBar: some View {
-        HStack {
-            // Call status
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 8, height: 8)
-
-                Text(callStatusText)
-                    .font(.headline)
-                    .foregroundColor(.white)
-            }
-
-            Spacer()
-        }
     }
 
     private var callStatusText: String {
@@ -148,39 +179,31 @@ struct UserVideoCallView: View {
         }
     }
 
-    // MARK: - Bottom Controls
-    private var bottomControls: some View {
-        HStack(spacing: 30) {
-            // Mute button
-            ControlButton(
-                icon: isAudioEnabled ? "mic.fill" : "mic.slash.fill",
-                isActive: !isAudioEnabled,
-                action: toggleAudio
-            )
+    // MARK: - Actions
+    private func setupAnnotationCallbacks() {
+        // Receive annotations from professional and add to AR manager
+        multipeerService.onAnnotationReceived = { [self] annotation in
+            arAnnotationManager.addAnnotation(annotation)
+            print("[User] Received annotation from professional - will track in AR")
+        }
 
-            // End call button
-            Button(action: { showEndCallAlert = true }) {
-                ZStack {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 70, height: 70)
+        // Handle video freeze command
+        multipeerService.onVideoFrozen = { [self] in
+            callManager.isVideoFrozen = true
+            print("[User] Video frozen by professional")
+        }
 
-                    Image(systemName: "phone.down.fill")
-                        .font(.system(size: 28))
-                        .foregroundColor(.white)
-                }
+        // Handle video resume command with annotations
+        multipeerService.onVideoResumed = { [self] annotations in
+            callManager.isVideoFrozen = false
+            // Add all annotations to AR manager
+            for annotation in annotations {
+                arAnnotationManager.addAnnotation(annotation)
             }
-
-            // Video toggle button
-            ControlButton(
-                icon: isVideoEnabled ? "video.fill" : "video.slash.fill",
-                isActive: !isVideoEnabled,
-                action: toggleVideo
-            )
+            print("[User] Video resumed with \(annotations.count) annotations")
         }
     }
 
-    // MARK: - Actions
     private func toggleControls() {
         withAnimation(.easeInOut(duration: 0.3)) {
             showControls.toggle()
@@ -208,7 +231,12 @@ struct UserVideoCallView: View {
     }
 
     private func endCall() {
+        if multipeerService.isConnected {
+            multipeerService.sendCallEnded()
+            multipeerService.disconnect()
+        }
         callManager.endCall()
+        arAnnotationManager.clearAll()
         dismiss()
     }
 }

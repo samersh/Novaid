@@ -23,9 +23,16 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is required for video calls to share your view with the professional</string>
+	<string>Camera access is required for AR video calls to share your view with the professional and track annotations in real-world space</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required for audio communication during calls</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Local network access is required to connect with nearby devices for remote assistance</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_novaid-assist._tcp</string>
+		<string>_novaid-assist._udp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -43,10 +50,13 @@
 		<string>armv7</string>
 		<string>camera</string>
 		<string>microphone</string>
+		<string>arkit</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>

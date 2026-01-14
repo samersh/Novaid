@@ -36,7 +36,7 @@ class AnnotationService: ObservableObject {
     func startDrawing(at point: CGPoint) {
         let colorHex = selectedColor.toHex() ?? "#FF0000"
 
-        var annotation = Annotation(
+        let annotation = Annotation(
             type: .drawing,
             points: [AnnotationPoint(point)],
             color: colorHex,

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ProfessionalVideoCallView: View {
+    @StateObject private var multipeerService = MultipeerService.shared
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -11,50 +12,83 @@ struct ProfessionalVideoCallView: View {
     @State private var controlsTimer: Timer?
 
     var body: some View {
-        ZStack {
-            // Video background
-            Color.black.ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                // Video background
+                Color.black.ignoresSafeArea()
 
-            // Remote video (user's camera)
-            RemoteVideoView()
-                .ignoresSafeArea()
+                // Calculate video frame bounds
+                let videoFrame = VideoFrameHelper.calculateVideoFrame(containerSize: geometry.size)
 
-            // Annotations overlay
-            AnnotationOverlayView(annotations: callManager.annotations)
-                .ignoresSafeArea()
-
-            // Drawing canvas (when in drawing mode)
-            if isDrawingMode {
-                DrawingCanvasView(annotationService: callManager.annotationService)
+                // Remote video from User's iPhone camera
+                RemoteVideoView()
                     .ignoresSafeArea()
-            }
 
-            // Frozen badge
-            if callManager.isVideoFrozen {
-                VStack {
-                    frozenBadge
-                        .padding(.top, 100)
-                    Spacer()
+                // Annotations overlay - constrained to video area
+                AnnotationOverlayView(annotations: callManager.annotations)
+                    .frame(width: videoFrame.width, height: videoFrame.height)
+                    .position(x: videoFrame.midX, y: videoFrame.midY)
+
+                // Drawing canvas (when in drawing mode) - constrained to video area
+                if isDrawingMode {
+                    DrawingCanvasView(
+                        annotationService: callManager.annotationService,
+                        onAnnotationCreated: { annotation in
+                            callManager.annotations.append(annotation)
+                            // Send via multipeer if connected
+                            if multipeerService.isConnected {
+                                multipeerService.sendAnnotation(annotation)
+                                print("[Professional] Sent annotation to user")
+                            }
+                        }
+                    )
+                    .frame(width: videoFrame.width, height: videoFrame.height)
+                    .position(x: videoFrame.midX, y: videoFrame.midY)
                 }
-            }
 
-            // Controls overlay
-            if showControls {
-                controlsOverlay
+                // Frozen badge
+                if callManager.isVideoFrozen {
+                    VStack {
+                        frozenBadge
+                            .padding(.top, 100)
+                        Spacer()
+                    }
+                }
+
+                // Connection status
+                if !multipeerService.isConnected {
+                    VStack {
+                        Spacer()
+                        connectionBanner
+                            .padding(.bottom, 150)
+                    }
+                }
+
+                // Controls overlay
+                if showControls {
+                    controlsOverlay
+                }
             }
         }
         .navigationBarHidden(true)
         .statusBar(hidden: true)
+        .landscapeLock()  // Lock to landscape orientation
         .onTapGesture {
             if !isDrawingMode {
                 toggleControls()
             }
         }
         .onAppear {
+            // Keep screen awake during call
+            UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
+            setupAnnotationCallback()
         }
         .onDisappear {
+            // Re-enable screen sleep
+            UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
+            OrientationManager.shared.unlock()
         }
         .alert("End Call", isPresented: $showEndCallAlert) {
             Button("Cancel", role: .cancel) { }
@@ -64,11 +98,28 @@ struct ProfessionalVideoCallView: View {
         } message: {
             Text("Are you sure you want to end this call?")
         }
-        .onChange(of: callManager.callState) { oldValue, newValue in
-            if newValue == .disconnected || newValue == .failed || newValue == .idle {
+        .onChange(of: multipeerService.isConnected) { newValue in
+            if !newValue {
                 dismiss()
             }
         }
+    }
+
+    // MARK: - Connection Banner
+    private var connectionBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+                .foregroundColor(.yellow)
+            Text("Demo Mode - No user connected")
+                .font(.caption)
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.7))
+        )
     }
 
     // MARK: - Frozen Badge
@@ -130,7 +181,7 @@ struct ProfessionalVideoCallView: View {
             // Call status
             HStack(spacing: 8) {
                 Circle()
-                    .fill(Color.green)
+                    .fill(multipeerService.isConnected ? Color.green : Color.yellow)
                     .frame(width: 8, height: 8)
 
                 Text(callManager.formattedDuration)
@@ -257,6 +308,11 @@ struct ProfessionalVideoCallView: View {
     }
 
     // MARK: - Actions
+    private func setupAnnotationCallback() {
+        // Setup is now done via onAnnotationCreated callback in DrawingCanvasView
+        // This method remains for any additional setup if needed
+    }
+
     private func toggleControls() {
         withAnimation(.easeInOut(duration: 0.3)) {
             showControls.toggle()
@@ -283,9 +339,15 @@ struct ProfessionalVideoCallView: View {
 
     private func toggleFreeze() {
         if callManager.isVideoFrozen {
-            callManager.resumeVideo()
+            callManager.isVideoFrozen = false
+            if multipeerService.isConnected {
+                multipeerService.sendResumeVideo(annotations: callManager.annotations)
+            }
         } else {
-            callManager.freezeVideo()
+            callManager.isVideoFrozen = true
+            if multipeerService.isConnected {
+                multipeerService.sendFreezeVideo()
+            }
         }
     }
 
@@ -302,6 +364,10 @@ struct ProfessionalVideoCallView: View {
     }
 
     private func endCall() {
+        if multipeerService.isConnected {
+            multipeerService.sendCallEnded()
+            multipeerService.disconnect()
+        }
         callManager.endCall()
         dismiss()
     }
@@ -342,27 +408,6 @@ struct ColorButton: View {
                     Circle()
                         .stroke(Color.white, lineWidth: isSelected ? 3 : 0)
                 )
-        }
-    }
-}
-
-// MARK: - Remote Video View (Placeholder)
-struct RemoteVideoView: View {
-    var body: some View {
-        // In production, this would display the remote WebRTC video stream
-        ZStack {
-            Color.black
-
-            // Placeholder content
-            VStack(spacing: 16) {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray.opacity(0.5))
-
-                Text("Remote Video")
-                    .font(.headline)
-                    .foregroundColor(.gray.opacity(0.5))
-            }
         }
     }
 }

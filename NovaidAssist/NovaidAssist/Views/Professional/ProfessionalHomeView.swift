@@ -1,12 +1,16 @@
 import SwiftUI
 
 struct ProfessionalHomeView: View {
+    @StateObject private var multipeerService = MultipeerService.shared
     @EnvironmentObject var callManager: CallManager
     @EnvironmentObject var userManager: UserManager
+
+    @State private var sessionCode = ""
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var navigateToCall = false
     @State private var ringAnimation = false
+    @State private var hasGeneratedCode = false
 
     var body: some View {
         ZStack {
@@ -18,40 +22,47 @@ struct ProfessionalHomeView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 20) {
-                // Header
-                headerSection
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Header
+                    headerSection
 
-                // Professional ID
-                professionalIdSection
+                    // Session Code Section
+                    sessionCodeSection
 
-                Spacer()
+                    // Connection Status
+                    connectionStatusSection
 
-                // Main content - incoming call or waiting
-                if let incomingCall = callManager.incomingCall {
-                    incomingCallSection(call: incomingCall)
-                } else {
-                    waitingSection
+                    Spacer().frame(height: 20)
+
+                    // Main content - connected or waiting
+                    if multipeerService.isConnected {
+                        connectedSection
+                    } else if multipeerService.isHosting {
+                        waitingSection
+                    } else {
+                        startHostingSection
+                    }
+
+                    Spacer().frame(height: 20)
+
+                    // Features section
+                    featuresSection
                 }
-
-                Spacer()
-
-                // Features section
-                featuresSection
+                .padding()
             }
-            .padding()
         }
         .navigationBarHidden(true)
         .onAppear {
-            connectToServer()
+            setupMultipeerCallbacks()
         }
         .alert("Error", isPresented: $showError) {
             Button("OK") { }
         } message: {
             Text(errorMessage)
         }
-        .onChange(of: callManager.callState) { oldValue, newValue in
-            if newValue == .connecting || newValue == .connected {
+        .onChange(of: multipeerService.isConnected) { newValue in
+            if newValue {
                 navigateToCall = true
             }
         }
@@ -71,31 +82,72 @@ struct ProfessionalHomeView: View {
                 .font(.subheadline)
                 .foregroundColor(.gray)
 
-            // Connection status
+            // Professional ID
             HStack(spacing: 6) {
-                Circle()
-                    .fill(callManager.isConnectedToServer ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-
-                Text(callManager.isConnectedToServer ? "Online - Ready for calls" : "Offline")
+                Text("Professional ID:")
                     .font(.caption)
                     .foregroundColor(.gray)
+
+                Text(userManager.shortId)
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(hex: "#e94560")!)
             }
         }
         .padding(.top, 40)
     }
 
-    // MARK: - Professional ID
-    private var professionalIdSection: some View {
-        VStack(spacing: 8) {
-            Text("Professional ID")
-                .font(.caption)
-                .foregroundColor(.gray)
+    // MARK: - Session Code Section
+    private var sessionCodeSection: some View {
+        VStack(spacing: 16) {
+            Text("Session Code")
+                .font(.headline)
+                .foregroundColor(.white)
 
-            Text(userManager.shortId)
-                .font(.system(size: 28, weight: .bold, design: .monospaced))
-                .foregroundColor(Color(hex: "#e94560")!)
-                .tracking(4)
+            if hasGeneratedCode {
+                VStack(spacing: 8) {
+                    Text(sessionCode)
+                        .font(.system(size: 48, weight: .bold, design: .monospaced))
+                        .foregroundColor(Color(hex: "#e94560")!)
+                        .tracking(8)
+
+                    Text("Share this code with the user")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+
+                    // Copy button
+                    Button(action: copyCode) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc.on.doc")
+                            Text("Copy Code")
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(
+                            Capsule()
+                                .fill(Color(hex: "#e94560")!.opacity(0.3))
+                        )
+                    }
+                }
+            } else {
+                Button(action: generateCode) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 24))
+
+                        Text("Generate Session Code")
+                            .font(.headline)
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 30)
+                    .padding(.vertical, 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(hex: "#e94560")!)
+                    )
+                }
+            }
         }
         .padding()
         .background(
@@ -104,82 +156,74 @@ struct ProfessionalHomeView: View {
         )
     }
 
-    // MARK: - Incoming Call
-    private func incomingCallSection(call: IncomingCall) -> some View {
-        VStack(spacing: 24) {
-            // Animated phone icon
+    // MARK: - Connection Status
+    private var connectionStatusSection: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 10, height: 10)
+
+            Text(multipeerService.connectionStatus)
+                .font(.subheadline)
+                .foregroundColor(.white)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.1))
+        )
+    }
+
+    private var statusColor: Color {
+        if multipeerService.isConnected {
+            return .green
+        } else if multipeerService.isHosting {
+            return .yellow
+        } else {
+            return .gray
+        }
+    }
+
+    // MARK: - Connected Section
+    private var connectedSection: some View {
+        VStack(spacing: 20) {
             ZStack {
                 Circle()
                     .fill(Color.green)
                     .frame(width: 100, height: 100)
-                    .scaleEffect(ringAnimation ? 1.3 : 1.0)
-                    .opacity(ringAnimation ? 0.5 : 1.0)
 
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 100, height: 100)
-
-                Image(systemName: "phone.fill")
-                    .font(.system(size: 40))
+                Image(systemName: "checkmark")
+                    .font(.system(size: 40, weight: .bold))
                     .foregroundColor(.white)
-                    .rotationEffect(.degrees(ringAnimation ? 15 : -15))
-            }
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.3).repeatForever(autoreverses: true)) {
-                    ringAnimation = true
-                }
             }
 
             VStack(spacing: 8) {
-                Text("Incoming Call")
-                    .font(.title)
+                Text("User Connected!")
+                    .font(.title2)
                     .fontWeight(.bold)
                     .foregroundColor(.white)
 
-                Text("User ID: \(call.callerShortId)")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
+                if let peerId = multipeerService.connectedPeerId {
+                    Text("Device: \(peerId)")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
             }
 
-            // Action buttons
-            HStack(spacing: 40) {
-                // Reject button
-                Button(action: rejectCall) {
-                    VStack(spacing: 8) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 70, height: 70)
-
-                            Image(systemName: "xmark")
-                                .font(.system(size: 28, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-
-                        Text("Decline")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                    }
+            Button(action: { navigateToCall = true }) {
+                HStack(spacing: 12) {
+                    Image(systemName: "video.fill")
+                    Text("Start Video Call")
                 }
-
-                // Accept button
-                Button(action: acceptCall) {
-                    VStack(spacing: 8) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 70, height: 70)
-
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 28, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-
-                        Text("Accept")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                    }
-                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 40)
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.green)
+                )
             }
         }
         .padding(30)
@@ -194,20 +238,62 @@ struct ProfessionalHomeView: View {
         VStack(spacing: 20) {
             ZStack {
                 Circle()
-                    .fill(Color.white.opacity(0.1))
+                    .fill(Color.yellow.opacity(0.2))
                     .frame(width: 100, height: 100)
 
-                Image(systemName: "iphone")
-                    .font(.system(size: 40))
-                    .foregroundColor(.gray)
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .yellow))
+                    .scaleEffect(2)
             }
 
-            Text("Waiting for calls...")
+            Text("Waiting for User...")
                 .font(.title3)
                 .fontWeight(.semibold)
                 .foregroundColor(.white)
 
-            Text("You will receive a notification when a user requests assistance")
+            Text("Make sure the user enters the session code\nand both devices are on the same WiFi network")
+                .font(.caption)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+
+            Button(action: stopHosting) {
+                Text("Cancel")
+                    .font(.subheadline)
+                    .foregroundColor(.red)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.red.opacity(0.5), lineWidth: 1)
+                    )
+            }
+        }
+        .padding(40)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.white.opacity(0.05))
+        )
+    }
+
+    // MARK: - Start Hosting Section
+    private var startHostingSection: some View {
+        VStack(spacing: 20) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(width: 100, height: 100)
+
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 40))
+                    .foregroundColor(.gray)
+            }
+
+            Text("Ready to Connect")
+                .font(.title3)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+
+            Text("Generate a session code and share it\nwith the user to start a connection")
                 .font(.caption)
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
@@ -252,34 +338,39 @@ struct ProfessionalHomeView: View {
     }
 
     // MARK: - Actions
-    private func connectToServer() {
-        Task {
-            do {
-                try await callManager.connect()
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showError = true
-                }
+    private func setupMultipeerCallbacks() {
+        multipeerService.onConnected = {
+            // Connection established
+        }
+
+        multipeerService.onDisconnected = {
+            Task { @MainActor in
+                navigateToCall = false
             }
+        }
+
+        multipeerService.onIncomingCall = { callerId in
+            // User connected
+            print("[Professional] User connected: \(callerId)")
         }
     }
 
-    private func acceptCall() {
-        Task {
-            do {
-                try await callManager.acceptCall()
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showError = true
-                }
-            }
-        }
+    private func generateCode() {
+        sessionCode = multipeerService.generateSessionCode()
+        hasGeneratedCode = true
+
+        // Start hosting with the generated code
+        multipeerService.startHosting(withCode: sessionCode)
     }
 
-    private func rejectCall() {
-        callManager.rejectCall()
+    private func copyCode() {
+        UIPasteboard.general.string = sessionCode
+    }
+
+    private func stopHosting() {
+        multipeerService.stopAll()
+        hasGeneratedCode = false
+        sessionCode = ""
     }
 }
 
