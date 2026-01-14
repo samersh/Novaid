@@ -3,123 +3,154 @@ import AVFoundation
 
 /// Camera preview view for displaying local camera feed
 struct CameraPreviewView: UIViewRepresentable {
-    @StateObject private var cameraManager = CameraManager()
+    var useRearCamera: Bool = true
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.backgroundColor = .black
+    func makeCoordinator() -> Coordinator {
+        Coordinator(useRearCamera: useRearCamera)
+    }
 
-        cameraManager.setupCamera(in: view)
-
+    func makeUIView(context: Context) -> CameraPreviewUIView {
+        let view = CameraPreviewUIView()
+        view.coordinator = context.coordinator
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        // Update if needed
+    func updateUIView(_ uiView: CameraPreviewUIView, context: Context) {
+        // Start camera when view appears
+        if !context.coordinator.isRunning {
+            context.coordinator.startCamera(in: uiView)
+        }
     }
-}
 
-/// Camera manager for handling camera setup and preview
-class CameraManager: NSObject, ObservableObject {
-    private var captureSession: AVCaptureSession?
-    private var previewLayer: AVCaptureVideoPreviewLayer?
+    class Coordinator: NSObject {
+        var captureSession: AVCaptureSession?
+        var previewLayer: AVCaptureVideoPreviewLayer?
+        var isRunning = false
+        let useRearCamera: Bool
 
-    @Published var isRunning = false
-    @Published var error: String?
+        init(useRearCamera: Bool) {
+            self.useRearCamera = useRearCamera
+            super.init()
+        }
 
-    func setupCamera(in view: UIView) {
-        checkPermissions { [weak self] granted in
-            guard granted else {
-                self?.error = "Camera permission denied"
+        func startCamera(in view: UIView) {
+            guard !isRunning else { return }
+
+            checkPermissions { [weak self] granted in
+                guard granted, let self = self else {
+                    print("[Camera] Permission denied")
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    self.configureSession(in: view)
+                }
+            }
+        }
+
+        private func checkPermissions(completion: @escaping (Bool) -> Void) {
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .authorized:
+                completion(true)
+            case .notDetermined:
+                AVCaptureDevice.requestAccess(for: .video) { granted in
+                    completion(granted)
+                }
+            default:
+                completion(false)
+            }
+        }
+
+        private func configureSession(in view: UIView) {
+            let session = AVCaptureSession()
+            session.sessionPreset = .high
+
+            // Get camera based on preference
+            let position: AVCaptureDevice.Position = useRearCamera ? .back : .front
+            guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
+                    ?? AVCaptureDevice.default(for: .video) else {
+                print("[Camera] No camera available")
                 return
             }
 
-            DispatchQueue.main.async {
-                self?.configureSession(in: view)
+            print("[Camera] Using camera: \(camera.localizedName), position: \(position == .back ? "rear" : "front")")
+
+            do {
+                let input = try AVCaptureDeviceInput(device: camera)
+                if session.canAddInput(input) {
+                    session.addInput(input)
+                }
+            } catch {
+                print("[Camera] Could not configure camera input: \(error)")
+                return
             }
+
+            // Create preview layer
+            let previewLayer = AVCaptureVideoPreviewLayer(session: session)
+            previewLayer.videoGravity = .resizeAspectFill
+            previewLayer.connection?.videoRotationAngle = 90
+
+            // Important: Set frame to view bounds
+            previewLayer.frame = view.layer.bounds
+
+            view.layer.insertSublayer(previewLayer, at: 0)
+
+            self.previewLayer = previewLayer
+            self.captureSession = session
+
+            // Start session on background thread
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                session.startRunning()
+                DispatchQueue.main.async {
+                    self?.isRunning = true
+                    print("[Camera] Session started running")
+                }
+            }
+        }
+
+        func stopCamera() {
+            captureSession?.stopRunning()
+            previewLayer?.removeFromSuperlayer()
+            isRunning = false
         }
     }
+}
 
-    private func checkPermissions(completion: @escaping (Bool) -> Void) {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            completion(true)
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { granted in
-                completion(granted)
-            }
-        default:
-            completion(false)
-        }
+/// Custom UIView that automatically updates preview layer frame
+class CameraPreviewUIView: UIView {
+    var coordinator: CameraPreviewView.Coordinator?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
     }
 
-    private func configureSession(in view: UIView) {
-        let session = AVCaptureSession()
-        session.sessionPreset = .high
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        backgroundColor = .black
+    }
 
-        // Get rear camera
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            error = "Rear camera not available"
-            return
-        }
-
-        do {
-            let input = try AVCaptureDeviceInput(device: camera)
-            if session.canAddInput(input) {
-                session.addInput(input)
-            }
-        } catch {
-            self.error = "Could not configure camera input"
-            return
-        }
-
-        // Create preview layer
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.videoGravity = .resizeAspectFill
-        previewLayer.frame = view.bounds
-
-        view.layer.addSublayer(previewLayer)
-
-        self.previewLayer = previewLayer
-        self.captureSession = session
-
-        // Start session on background thread
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            session.startRunning()
-            DispatchQueue.main.async {
-                self?.isRunning = true
-            }
-        }
-
+    override func layoutSubviews() {
+        super.layoutSubviews()
         // Update preview layer frame when view resizes
-        NotificationCenter.default.addObserver(
-            forName: UIDevice.orientationDidChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.previewLayer?.frame = view.bounds
-        }
-    }
-
-    func stopCamera() {
-        captureSession?.stopRunning()
-        isRunning = false
+        coordinator?.previewLayer?.frame = bounds
     }
 
     deinit {
-        stopCamera()
+        coordinator?.stopCamera()
     }
 }
 
 /// Camera preview with stabilization overlay
 struct StabilizedCameraPreview: View {
     @ObservedObject var stabilizer: VideoStabilizer
+    var useRearCamera: Bool = true
 
     var body: some View {
         GeometryReader { geometry in
-            CameraPreviewView()
+            CameraPreviewView(useRearCamera: useRearCamera)
                 .offset(x: stabilizer.currentOffset.x, y: stabilizer.currentOffset.y)
-                .scaleEffect(1.05) // Slight zoom to hide edges
+                .scaleEffect(1.05) // Slight zoom to hide edges during stabilization
                 .clipped()
         }
         .onAppear {

@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 
 struct UserVideoCallView: View {
+    @StateObject private var multipeerService = MultipeerService.shared
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -16,8 +17,8 @@ struct UserVideoCallView: View {
             // Video background
             Color.black.ignoresSafeArea()
 
-            // Camera preview
-            CameraPreviewView()
+            // Camera preview - using REAR camera
+            CameraPreviewView(useRearCamera: true)
                 .ignoresSafeArea()
 
             // AR Annotations overlay
@@ -53,8 +54,8 @@ struct UserVideoCallView: View {
         } message: {
             Text("Are you sure you want to end this call?")
         }
-        .onChange(of: callManager.callState) { oldValue, newValue in
-            if newValue == .disconnected || newValue == .failed || newValue == .idle {
+        .onChange(of: multipeerService.isConnected) { newValue in
+            if !newValue && callManager.callState == .connected {
                 dismiss()
             }
         }
@@ -208,6 +209,10 @@ struct UserVideoCallView: View {
     }
 
     private func endCall() {
+        if multipeerService.isConnected {
+            multipeerService.sendCallEnded()
+            multipeerService.disconnect()
+        }
         callManager.endCall()
         dismiss()
     }

@@ -26,6 +26,13 @@
 	<string>Camera access is required for video calls to share your view with the professional</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required for audio communication during calls</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Local network access is required to connect with nearby devices for remote assistance</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_novaid-assist._tcp</string>
+		<string>_novaid-assist._udp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ProfessionalVideoCallView: View {
+    @StateObject private var multipeerService = MultipeerService.shared
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -15,8 +16,8 @@ struct ProfessionalVideoCallView: View {
             // Video background
             Color.black.ignoresSafeArea()
 
-            // Remote video (user's camera)
-            RemoteVideoView()
+            // Remote video (user's camera) - for demo, show local camera
+            CameraPreviewView(useRearCamera: false)
                 .ignoresSafeArea()
 
             // Annotations overlay
@@ -38,6 +39,15 @@ struct ProfessionalVideoCallView: View {
                 }
             }
 
+            // Connection status
+            if !multipeerService.isConnected {
+                VStack {
+                    Spacer()
+                    connectionBanner
+                        .padding(.bottom, 150)
+                }
+            }
+
             // Controls overlay
             if showControls {
                 controlsOverlay
@@ -52,6 +62,7 @@ struct ProfessionalVideoCallView: View {
         }
         .onAppear {
             startControlsTimer()
+            setupAnnotationCallback()
         }
         .onDisappear {
             controlsTimer?.invalidate()
@@ -64,11 +75,28 @@ struct ProfessionalVideoCallView: View {
         } message: {
             Text("Are you sure you want to end this call?")
         }
-        .onChange(of: callManager.callState) { newValue in
-            if newValue == .disconnected || newValue == .failed || newValue == .idle {
+        .onChange(of: multipeerService.isConnected) { newValue in
+            if !newValue {
                 dismiss()
             }
         }
+    }
+
+    // MARK: - Connection Banner
+    private var connectionBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+                .foregroundColor(.yellow)
+            Text("Demo Mode - No user connected")
+                .font(.caption)
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.7))
+        )
     }
 
     // MARK: - Frozen Badge
@@ -130,7 +158,7 @@ struct ProfessionalVideoCallView: View {
             // Call status
             HStack(spacing: 8) {
                 Circle()
-                    .fill(Color.green)
+                    .fill(multipeerService.isConnected ? Color.green : Color.yellow)
                     .frame(width: 8, height: 8)
 
                 Text(callManager.formattedDuration)
@@ -257,6 +285,17 @@ struct ProfessionalVideoCallView: View {
     }
 
     // MARK: - Actions
+    private func setupAnnotationCallback() {
+        // When an annotation is created locally, send it to the user
+        callManager.annotationService.onAnnotationCreated = { [self] annotation in
+            callManager.annotations.append(annotation)
+            // Send via multipeer if connected
+            if multipeerService.isConnected {
+                multipeerService.sendAnnotation(annotation)
+            }
+        }
+    }
+
     private func toggleControls() {
         withAnimation(.easeInOut(duration: 0.3)) {
             showControls.toggle()
@@ -283,9 +322,15 @@ struct ProfessionalVideoCallView: View {
 
     private func toggleFreeze() {
         if callManager.isVideoFrozen {
-            callManager.resumeVideo()
+            callManager.isVideoFrozen = false
+            if multipeerService.isConnected {
+                multipeerService.sendResumeVideo(annotations: callManager.annotations)
+            }
         } else {
-            callManager.freezeVideo()
+            callManager.isVideoFrozen = true
+            if multipeerService.isConnected {
+                multipeerService.sendFreezeVideo()
+            }
         }
     }
 
@@ -302,6 +347,10 @@ struct ProfessionalVideoCallView: View {
     }
 
     private func endCall() {
+        if multipeerService.isConnected {
+            multipeerService.sendCallEnded()
+            multipeerService.disconnect()
+        }
         callManager.endCall()
         dismiss()
     }
@@ -342,27 +391,6 @@ struct ColorButton: View {
                     Circle()
                         .stroke(Color.white, lineWidth: isSelected ? 3 : 0)
                 )
-        }
-    }
-}
-
-// MARK: - Remote Video View (Placeholder)
-struct RemoteVideoView: View {
-    var body: some View {
-        // In production, this would display the remote WebRTC video stream
-        ZStack {
-            Color.black
-
-            // Placeholder content
-            VStack(spacing: 16) {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray.opacity(0.5))
-
-                Text("Remote Video")
-                    .font(.headline)
-                    .foregroundColor(.gray.opacity(0.5))
-            }
         }
     }
 }

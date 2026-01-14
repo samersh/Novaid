@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct UserHomeView: View {
+    @StateObject private var multipeerService = MultipeerService.shared
     @EnvironmentObject var callManager: CallManager
     @EnvironmentObject var userManager: UserManager
+
+    @State private var sessionCode = ""
     @State private var isConnecting = false
     @State private var showError = false
     @State private var errorMessage = ""
@@ -19,40 +22,45 @@ struct UserHomeView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 20) {
-                // Header
-                headerSection
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Header
+                    headerSection
 
-                // User ID
-                userIdSection
+                    // Session Code Input
+                    sessionCodeSection
 
-                Spacer()
+                    // Connection Status
+                    connectionStatusSection
 
-                // Call Button
-                callButtonSection
+                    Spacer().frame(height: 20)
 
-                // Demo Button
-                demoButtonSection
+                    // Call Button
+                    callButtonSection
 
-                Spacer()
+                    // Demo Button
+                    demoButtonSection
 
-                // Info Section
-                infoSection
+                    Spacer().frame(height: 20)
+
+                    // Info Section
+                    infoSection
+                }
+                .padding()
             }
-            .padding()
         }
         .navigationBarHidden(true)
         .onAppear {
-            connectToServer()
             startPulseAnimation()
+            setupMultipeerCallbacks()
         }
         .alert("Error", isPresented: $showError) {
             Button("OK") { }
         } message: {
             Text(errorMessage)
         }
-        .onChange(of: callManager.callState) { oldValue, newValue in
-            if newValue == .connecting || newValue == .connected {
+        .onChange(of: multipeerService.isConnected) { newValue in
+            if newValue {
                 navigateToCall = true
             }
         }
@@ -72,31 +80,52 @@ struct UserHomeView: View {
                 .font(.subheadline)
                 .foregroundColor(.gray)
 
-            // Connection status
+            // User ID
             HStack(spacing: 6) {
-                Circle()
-                    .fill(callManager.isConnectedToServer ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-
-                Text(callManager.isConnectedToServer ? "Connected" : "Offline")
+                Text("Your ID:")
                     .font(.caption)
                     .foregroundColor(.gray)
+
+                Text(userManager.shortId)
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(hex: "#4361ee")!)
             }
         }
         .padding(.top, 40)
     }
 
-    // MARK: - User ID
-    private var userIdSection: some View {
-        VStack(spacing: 8) {
-            Text("Your ID")
+    // MARK: - Session Code Section
+    private var sessionCodeSection: some View {
+        VStack(spacing: 12) {
+            Text("Enter Session Code")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            Text("Get this code from your professional")
                 .font(.caption)
                 .foregroundColor(.gray)
 
-            Text(userManager.shortId)
-                .font(.system(size: 28, weight: .bold, design: .monospaced))
-                .foregroundColor(Color(hex: "#4361ee")!)
-                .tracking(4)
+            HStack(spacing: 12) {
+                TextField("000000", text: $sessionCode)
+                    .keyboardType(.numberPad)
+                    .font(.system(size: 32, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .frame(height: 60)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.1))
+                    )
+                    .onChange(of: sessionCode) { newValue in
+                        // Limit to 6 digits
+                        if newValue.count > 6 {
+                            sessionCode = String(newValue.prefix(6))
+                        }
+                        // Only allow numbers
+                        sessionCode = newValue.filter { $0.isNumber }
+                    }
+            }
+            .padding(.horizontal)
         }
         .padding()
         .background(
@@ -105,17 +134,48 @@ struct UserHomeView: View {
         )
     }
 
+    // MARK: - Connection Status
+    private var connectionStatusSection: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 10, height: 10)
+
+            Text(multipeerService.connectionStatus)
+                .font(.subheadline)
+                .foregroundColor(.white)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.1))
+        )
+    }
+
+    private var statusColor: Color {
+        if multipeerService.isConnected {
+            return .green
+        } else if multipeerService.isBrowsing {
+            return .yellow
+        } else {
+            return .gray
+        }
+    }
+
     // MARK: - Call Button
     private var callButtonSection: some View {
         VStack(spacing: 16) {
             Button(action: startCall) {
                 ZStack {
                     // Pulse effect
-                    Circle()
-                        .fill(Color(hex: "#4361ee")!.opacity(0.3))
-                        .frame(width: 200, height: 200)
-                        .scaleEffect(pulseAnimation ? 1.2 : 1.0)
-                        .opacity(pulseAnimation ? 0 : 0.5)
+                    if canConnect {
+                        Circle()
+                            .fill(Color(hex: "#4361ee")!.opacity(0.3))
+                            .frame(width: 200, height: 200)
+                            .scaleEffect(pulseAnimation ? 1.2 : 1.0)
+                            .opacity(pulseAnimation ? 0 : 0.5)
+                    }
 
                     // Main button
                     Circle()
@@ -129,36 +189,59 @@ struct UserHomeView: View {
                         .frame(width: 180, height: 180)
                         .shadow(color: Color(hex: "#4361ee")!.opacity(0.5), radius: 20)
 
-                    if isConnecting {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(2)
+                    if isConnecting || multipeerService.isBrowsing {
+                        VStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(2)
+
+                            Text("Connecting...")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                        }
                     } else {
                         VStack(spacing: 8) {
                             Image(systemName: "phone.fill")
                                 .font(.system(size: 48))
                                 .foregroundColor(.white)
 
-                            Text("Start Call")
+                            Text("Connect")
                                 .font(.headline)
                                 .foregroundColor(.white)
                         }
                     }
                 }
             }
-            .disabled(isConnecting || !callManager.isConnectedToServer)
-            .opacity(callManager.isConnectedToServer ? 1 : 0.5)
+            .disabled(!canConnect || isConnecting)
+            .opacity(canConnect ? 1 : 0.5)
 
-            Text(isConnecting ? "Connecting to a professional..." : "Tap to connect with a professional")
+            Text(buttonHelpText)
                 .font(.caption)
                 .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var canConnect: Bool {
+        sessionCode.count == 6 && !multipeerService.isBrowsing && !multipeerService.isConnected
+    }
+
+    private var buttonHelpText: String {
+        if sessionCode.count < 6 {
+            return "Enter the 6-digit session code first"
+        } else if multipeerService.isBrowsing {
+            return "Searching for professional..."
+        } else if multipeerService.isConnected {
+            return "Connected!"
+        } else {
+            return "Tap to connect with the professional"
         }
     }
 
     // MARK: - Demo Button
     private var demoButtonSection: some View {
         Button(action: startDemoCall) {
-            Text("Try Demo")
+            Text("Try Demo (No Connection)")
                 .font(.subheadline)
                 .foregroundColor(.gray)
                 .padding(.horizontal, 24)
@@ -173,9 +256,9 @@ struct UserHomeView: View {
     // MARK: - Info Section
     private var infoSection: some View {
         VStack(spacing: 12) {
-            InfoRow(icon: "video.fill", text: "Share your view with rear camera")
+            InfoRow(icon: "video.fill", text: "Share your rear camera view")
             InfoRow(icon: "hand.draw.fill", text: "Receive AR guidance from experts")
-            InfoRow(icon: "lock.fill", text: "Secure peer-to-peer connection")
+            InfoRow(icon: "wifi", text: "Connect via WiFi or Bluetooth")
         }
         .padding()
         .background(
@@ -185,32 +268,49 @@ struct UserHomeView: View {
     }
 
     // MARK: - Actions
-    private func connectToServer() {
-        Task {
-            do {
-                try await callManager.connect()
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showError = true
-                }
+    private func setupMultipeerCallbacks() {
+        multipeerService.onConnected = {
+            Task { @MainActor in
+                isConnecting = false
+            }
+        }
+
+        multipeerService.onDisconnected = {
+            Task { @MainActor in
+                isConnecting = false
+                navigateToCall = false
+            }
+        }
+
+        multipeerService.onAnnotationReceived = { annotation in
+            Task { @MainActor in
+                callManager.annotations.append(annotation)
+            }
+        }
+
+        multipeerService.onVideoFrozen = {
+            Task { @MainActor in
+                callManager.isVideoFrozen = true
+            }
+        }
+
+        multipeerService.onVideoResumed = { annotations in
+            Task { @MainActor in
+                callManager.isVideoFrozen = false
+                callManager.annotations.append(contentsOf: annotations)
             }
         }
     }
 
     private func startCall() {
-        isConnecting = true
-        Task {
-            do {
-                try await callManager.startCall()
-            } catch {
-                await MainActor.run {
-                    isConnecting = false
-                    errorMessage = error.localizedDescription
-                    showError = true
-                }
-            }
+        guard sessionCode.count == 6 else {
+            errorMessage = "Please enter a valid 6-digit session code"
+            showError = true
+            return
         }
+
+        isConnecting = true
+        multipeerService.startBrowsing(forCode: sessionCode)
     }
 
     private func startDemoCall() {
