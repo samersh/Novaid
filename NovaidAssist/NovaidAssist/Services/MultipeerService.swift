@@ -49,6 +49,21 @@ class MultipeerService: NSObject, ObservableObject {
     private var lastFrameTime: Date = Date()
     private let minFrameInterval: TimeInterval = 1.0 / 30.0 // 30 FPS max for smoother video
 
+    // Adaptive quality settings based on WebRTC best practices
+    private var currentCompressionQuality: CGFloat = 0.5 // Start at 0.5 for better quality
+    private let minCompressionQuality: CGFloat = 0.3
+    private let maxCompressionQuality: CGFloat = 0.7
+    private var framesSent: Int = 0
+    private var framesFailed: Int = 0
+    private var lastQualityAdjustment: Date = Date()
+
+    // Network monitoring statistics
+    private var totalFramesSent: Int = 0
+    private var totalFramesFailed: Int = 0
+    private var totalBytesSent: Int64 = 0
+    private var sessionStartTime: Date?
+    private var lastStatsLog: Date = Date()
+
     private let serviceType = "novaid-assist"
 
     // MARK: - Initialization
@@ -163,7 +178,7 @@ class MultipeerService: NSObject, ObservableObject {
         sendData(data)
     }
 
-    /// Send video frame with orientation (compressed JPEG)
+    /// Send video frame with orientation (compressed JPEG with adaptive quality)
     func sendVideoFrame(_ image: UIImage, orientation: DeviceOrientation = DeviceOrientation()) {
         // Rate limit to prevent flooding
         let now = Date()
@@ -172,8 +187,8 @@ class MultipeerService: NSObject, ObservableObject {
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Lower compression for faster encoding and minimal latency
-        guard let jpegData = image.jpegData(compressionQuality: 0.4) else { return }
+        // Adaptive quality based on network performance (WebRTC-inspired)
+        guard let jpegData = image.jpegData(compressionQuality: currentCompressionQuality) else { return }
 
         // Create video frame with orientation message
         let frameData = VideoFrameData(imageData: jpegData, orientation: orientation)
@@ -185,9 +200,80 @@ class MultipeerService: NSObject, ObservableObject {
         // Send unreliable for speed (like UDP)
         do {
             try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            framesSent += 1
+            totalFramesSent += 1
+            totalBytesSent += Int64(data.count)
+            adjustQualityIfNeeded()
+            logNetworkStatsIfNeeded()
         } catch {
-            // Silently fail for video frames
+            framesFailed += 1
+            totalFramesFailed += 1
+            adjustQualityIfNeeded()
         }
+    }
+
+    /// Adjust compression quality based on network performance (WebRTC-inspired adaptive quality)
+    private func adjustQualityIfNeeded() {
+        // Adjust every 2 seconds (similar to WebRTC bitrate adjustment)
+        let now = Date()
+        guard now.timeIntervalSince(lastQualityAdjustment) >= 2.0 else { return }
+        lastQualityAdjustment = now
+
+        guard framesSent > 0 else { return }
+
+        let failureRate = Double(framesFailed) / Double(framesSent + framesFailed)
+        let oldQuality = currentCompressionQuality
+
+        if failureRate > 0.1 {
+            // High failure rate (>10%) - reduce quality for smaller frames
+            currentCompressionQuality = max(minCompressionQuality, currentCompressionQuality - 0.05)
+            print("[Multipeer] 📉 High failure rate (\(Int(failureRate * 100))%) - reducing quality to \(String(format: "%.2f", currentCompressionQuality))")
+        } else if failureRate < 0.02 && currentCompressionQuality < maxCompressionQuality {
+            // Low failure rate (<2%) - increase quality gradually
+            currentCompressionQuality = min(maxCompressionQuality, currentCompressionQuality + 0.03)
+            print("[Multipeer] 📈 Low failure rate (\(Int(failureRate * 100))%) - increasing quality to \(String(format: "%.2f", currentCompressionQuality))")
+        }
+
+        // Reset counters
+        framesSent = 0
+        framesFailed = 0
+    }
+
+    /// Log network statistics periodically for monitoring
+    private func logNetworkStatsIfNeeded() {
+        let now = Date()
+        guard now.timeIntervalSince(lastStatsLog) >= 10.0 else { return }
+        lastStatsLog = now
+
+        let totalFrames = totalFramesSent + totalFramesFailed
+        guard totalFrames > 0 else { return }
+
+        let successRate = Double(totalFramesSent) / Double(totalFrames) * 100
+        let avgBytesPerFrame = totalFramesSent > 0 ? totalBytesSent / Int64(totalFramesSent) : 0
+        let mbTransferred = Double(totalBytesSent) / 1_000_000.0
+
+        if let startTime = sessionStartTime {
+            let duration = now.timeIntervalSince(startTime)
+            let fps = Double(totalFramesSent) / duration
+            let mbps = (Double(totalBytesSent) * 8.0) / (duration * 1_000_000.0)
+
+            print("[Multipeer] 📊 Network Stats: \(totalFramesSent) frames sent, \(String(format: "%.1f", successRate))% success rate, \(String(format: "%.1f", fps)) FPS, \(String(format: "%.2f", mbps)) Mbps, \(avgBytesPerFrame) bytes/frame, Quality: \(String(format: "%.2f", currentCompressionQuality))")
+        } else {
+            sessionStartTime = now
+        }
+    }
+
+    /// Reset network statistics (called on new connection)
+    private func resetNetworkStats() {
+        totalFramesSent = 0
+        totalFramesFailed = 0
+        totalBytesSent = 0
+        framesSent = 0
+        framesFailed = 0
+        sessionStartTime = Date()
+        lastStatsLog = Date()
+        currentCompressionQuality = 0.5 // Reset to default quality
+        print("[Multipeer] 📊 Network statistics reset for new session")
     }
 
     /// Send frozen frame (compressed JPEG)
@@ -352,6 +438,7 @@ extension MultipeerService: MCSessionDelegate {
                 self.connectedPeerId = peerID.displayName
                 self.connectionStatus = "Connected to \(peerID.displayName)"
                 self.stopAll()
+                self.resetNetworkStats()
                 self.onConnected?()
 
             case .connecting:

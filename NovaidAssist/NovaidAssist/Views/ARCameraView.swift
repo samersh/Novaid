@@ -166,9 +166,9 @@ struct ARCameraView: UIViewRepresentable {
             // This is the key: orientation is in the image, not applied as transform
             let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: imageOrientation)
 
-            // Lower resolution optimized for minimal latency
-            // 540x960 provides good quality with fast transmission
-            let targetSize = CGSize(width: 540, height: 960)
+            // Industry standard 720p resolution for remote assistance
+            // Based on WebRTC and Zoho Lens best practices
+            let targetSize = CGSize(width: 720, height: 1280)
             UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
             uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
