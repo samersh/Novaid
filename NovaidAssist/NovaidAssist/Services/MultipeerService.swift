@@ -45,7 +45,7 @@ class MultipeerService: NSObject, ObservableObject {
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     private var lastFrameTime: Date = Date()
-    private let minFrameInterval: TimeInterval = 1.0 / 15.0 // 15 FPS max
+    private let minFrameInterval: TimeInterval = 1.0 / 30.0 // 30 FPS max for smoother video
 
     private let serviceType = "novaid-assist"
 
@@ -170,8 +170,8 @@ class MultipeerService: NSObject, ObservableObject {
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Compress to JPEG with lower quality for speed
-        guard let jpegData = image.jpegData(compressionQuality: 0.3) else { return }
+        // Compress to JPEG with balanced quality for good visual fidelity
+        guard let jpegData = image.jpegData(compressionQuality: 0.6) else { return }
 
         // Create video frame with orientation message
         let frameData = VideoFrameData(imageData: jpegData, orientation: orientation)
@@ -192,8 +192,8 @@ class MultipeerService: NSObject, ObservableObject {
     func sendFrozenFrame(_ image: UIImage) {
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Compress to JPEG with higher quality for frozen frame
-        guard let jpegData = image.jpegData(compressionQuality: 0.7) else { return }
+        // Compress to JPEG with high quality for frozen frame (for annotation drawing)
+        guard let jpegData = image.jpegData(compressionQuality: 0.85) else { return }
 
         let message = MultipeerMessage(type: .frozenFrame, payload: jpegData)
         guard let data = try? JSONEncoder().encode(message) else { return }

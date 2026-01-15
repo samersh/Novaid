@@ -66,14 +66,14 @@ struct ARCameraView: UIViewRepresentable {
         private let frameQueue = DispatchQueue(label: "com.novaid.arFrameQueue")
         private var isSessionReady = false
         private var lastFrameTime: Date = Date()
-        private let minFrameInterval: TimeInterval = 1.0 / 15.0
+        private let minFrameInterval: TimeInterval = 1.0 / 30.0  // 30 FPS for smoother video
         private var detectedPlanes: [UUID: ARPlaneAnchor] = [:]
         private var currentOrientation = DeviceOrientation()
         var isVideoFrozen = false
         private var lastCapturedFrame: UIImage?
 
         func startFrameStreaming() {
-            frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
+            frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
                 self?.captureAndSendFrame()
             }
 
@@ -166,8 +166,8 @@ struct ARCameraView: UIViewRepresentable {
             // This is the key: orientation is in the image, not applied as transform
             let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: imageOrientation)
 
-            // Resize to target dimensions (maintains orientation metadata)
-            let targetSize = CGSize(width: 480, height: 640)
+            // Resize to higher resolution for better quality (720p)
+            let targetSize = CGSize(width: 720, height: 1280)
             UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
             uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
