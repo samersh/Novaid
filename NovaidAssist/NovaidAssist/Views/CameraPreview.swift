@@ -207,16 +207,11 @@ struct RemoteVideoView: View {
 
                 // Show frozen frame if available, otherwise show live frame
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
-                    let shouldRotateFrame = shouldRotateFrame()
-
-                    // When iPhone is landscape, rotate the entire view 90° CCW
-                    Group {
-                        Image(uiImage: frame)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                    }
-                    .rotationEffect(.degrees(shouldRotateFrame ? -90 : 0))  // Rotate frame CCW, not content
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    Image(uiImage: frame)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .rotationEffect(.degrees(rotationAngle))
+                        .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -232,17 +227,20 @@ struct RemoteVideoView: View {
         }
     }
 
-    /// Check if frame should be rotated based on iPhone orientation
-    private func shouldRotateFrame() -> Bool {
+    /// Calculate rotation angle based on iPhone orientation
+    private var rotationAngle: Double {
         let orientation = multipeerService.receivedDeviceOrientation.state
 
         switch orientation {
+        case .portrait, .portraitUpsideDown:
+            // iPhone is vertical → Rotate content 90° clockwise on iPad
+            return 90
         case .landscapeRight, .landscapeLeft:
-            // iPhone is landscape → Rotate frame 90° CCW
-            return true
-        case .portrait, .portraitUpsideDown, .unknown:
-            // iPhone is portrait → No rotation
-            return false
+            // iPhone is landscape → Rotate content 180° clockwise on iPad
+            return 180
+        case .unknown:
+            // Default to 90°
+            return 90
         }
     }
 

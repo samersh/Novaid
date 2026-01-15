@@ -206,16 +206,23 @@ class MultipeerService: NSObject, ObservableObject {
 
     /// Send audio data
     func sendAudioData(_ audioData: Data) {
-        guard isConnected, !session.connectedPeers.isEmpty else { return }
+        guard isConnected, !session.connectedPeers.isEmpty else {
+            print("[Multipeer] ⚠️ Cannot send audio - not connected")
+            return
+        }
 
         let message = MultipeerMessage(type: .audioData, payload: audioData)
-        guard let data = try? JSONEncoder().encode(message) else { return }
+        guard let data = try? JSONEncoder().encode(message) else {
+            print("[Multipeer] ❌ Failed to encode audio message")
+            return
+        }
 
         // Send unreliable for low latency (like UDP)
         do {
             try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            print("[Multipeer] ✅ Sent audio data: \(audioData.count) bytes to \(session.connectedPeers.count) peer(s)")
         } catch {
-            // Silently fail for audio packets
+            print("[Multipeer] ❌ Failed to send audio: \(error.localizedDescription)")
         }
     }
 
@@ -380,7 +387,10 @@ extension MultipeerService: MCSessionDelegate {
 
             case .audioData:
                 if let payload = message.payload {
+                    print("[Multipeer] ✅ Received audio data: \(payload.count) bytes")
                     self.onAudioDataReceived?(payload)
+                } else {
+                    print("[Multipeer] ⚠️ Received audio message with no payload")
                 }
             }
         }
