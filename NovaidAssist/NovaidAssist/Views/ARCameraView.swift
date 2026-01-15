@@ -101,7 +101,7 @@ struct ARCameraView: UIViewRepresentable {
                 print("[AR] ✅ H.264 hardware encoder setup (720p @ 30fps)")
 
                 // Setup callback for encoded frames
-                videoCodec.onEncodedFrame = { [weak self] h264Data, presentationTime in
+                videoCodec.onEncodedFrame = { [weak self] (h264Data: Data, presentationTime: CMTime) in
                     self?.sendH264Frame(h264Data)
                 }
             } else {
