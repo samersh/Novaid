@@ -209,10 +209,9 @@ struct RemoteVideoView: View {
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
                     Image(uiImage: frame)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
+                        .aspectRatio(contentMode: .fit)
                         .rotationEffect(.degrees(rotationAngle))
                         .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
