@@ -67,6 +67,11 @@ class MultipeerService: NSObject, ObservableObject {
     private var sessionStartTime: Date?
     private var lastStatsLog: Date = Date()
 
+    // Chunk reassembly for large keyframes
+    private var chunkBuffer: [String: [Int: Data]] = [:] // [chunkID: [chunkIndex: data]]
+    private var chunkMetadata: [String: (totalChunks: Int, receivedChunks: Set<Int>)] = [:]
+    private let maxChunkSize = 16384 // 16KB chunks for reliable transmission
+
     private let serviceType = "novaid-assist"
 
     // MARK: - Initialization
@@ -193,6 +198,13 @@ class MultipeerService: NSObject, ObservableObject {
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
+        // For large keyframes (>30KB), send in chunks to avoid truncation
+        if isKeyframe && h264Data.count > 30000 {
+            sendH264DataInChunks(h264Data)
+            return
+        }
+
+        // Small frames and regular P-frames: send directly
         let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
         guard let data = try? JSONEncoder().encode(message) else { return }
 
@@ -201,7 +213,7 @@ class MultipeerService: NSObject, ObservableObject {
         let sendMode: MCSessionSendDataMode = isKeyframe ? .reliable : .unreliable
 
         if isKeyframe {
-            print("[Multipeer] 🔑 Sending KEYFRAME reliably: \(data.count) bytes")
+            print("[Multipeer] 🔑 Sending small KEYFRAME reliably: \(data.count) bytes")
         }
 
         do {
@@ -215,6 +227,75 @@ class MultipeerService: NSObject, ObservableObject {
             framesFailed += 1
             totalFramesFailed += 1
             adjustQualityIfNeeded()
+        }
+    }
+
+    /// Send large H.264 keyframe in chunks for reliable transmission
+    private func sendH264DataInChunks(_ h264Data: Data) {
+        let chunkID = UUID().uuidString
+        let totalChunks = (h264Data.count + maxChunkSize - 1) / maxChunkSize
+
+        print("[Multipeer] 🔑 Sending LARGE KEYFRAME in \(totalChunks) chunks (\(h264Data.count) bytes total)")
+
+        for chunkIndex in 0..<totalChunks {
+            let startOffset = chunkIndex * maxChunkSize
+            let endOffset = min(startOffset + maxChunkSize, h264Data.count)
+            let chunkData = h264Data.subdata(in: startOffset..<endOffset)
+
+            let chunk = H264ChunkData(
+                chunkID: chunkID,
+                chunkIndex: chunkIndex,
+                totalChunks: totalChunks,
+                chunkData: chunkData
+            )
+
+            guard let chunkPayload = try? JSONEncoder().encode(chunk) else { continue }
+            let message = MultipeerMessage(type: .h264Chunk, payload: chunkPayload)
+            guard let data = try? JSONEncoder().encode(message) else { continue }
+
+            do {
+                try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+                print("[Multipeer]   📦 Sent chunk \(chunkIndex + 1)/\(totalChunks) (\(chunkData.count) bytes)")
+            } catch {
+                print("[Multipeer] ❌ Failed to send chunk \(chunkIndex): \(error)")
+            }
+        }
+    }
+
+    /// Handle received H.264 chunk and reassemble when complete
+    private func handleH264Chunk(_ chunk: H264ChunkData) {
+        let chunkID = chunk.chunkID
+
+        print("[Multipeer] 📦 Received chunk \(chunk.chunkIndex + 1)/\(chunk.totalChunks) (\(chunk.chunkData.count) bytes)")
+
+        // Initialize storage for this chunk set
+        if chunkBuffer[chunkID] == nil {
+            chunkBuffer[chunkID] = [:]
+            chunkMetadata[chunkID] = (totalChunks: chunk.totalChunks, receivedChunks: Set<Int>())
+        }
+
+        // Store this chunk
+        chunkBuffer[chunkID]?[chunk.chunkIndex] = chunk.chunkData
+        chunkMetadata[chunkID]?.receivedChunks.insert(chunk.chunkIndex)
+
+        // Check if we have all chunks
+        if chunkMetadata[chunkID]?.receivedChunks.count == chunk.totalChunks {
+            // Reassemble the complete frame
+            var completeData = Data()
+            for i in 0..<chunk.totalChunks {
+                if let chunkData = chunkBuffer[chunkID]?[i] {
+                    completeData.append(chunkData)
+                }
+            }
+
+            print("[Multipeer] ✅ Reassembled complete KEYFRAME: \(completeData.count) bytes from \(chunk.totalChunks) chunks")
+
+            // Send to decoder
+            onH264DataReceived?(completeData)
+
+            // Clean up
+            chunkBuffer.removeValue(forKey: chunkID)
+            chunkMetadata.removeValue(forKey: chunkID)
         }
     }
 
@@ -619,6 +700,13 @@ extension MultipeerService: MCSessionDelegate {
                     print("[Multipeer] ⚠️ H.264 frame message has no payload")
                 }
 
+            case .h264Chunk:
+                // Reassemble chunked H.264 keyframe
+                if let payload = message.payload,
+                   let chunk = try? JSONDecoder().decode(H264ChunkData.self, from: payload) {
+                    self.handleH264Chunk(chunk)
+                }
+
             case .pixelBufferFrame:
                 // Fallback: Direct CVPixelBuffer transmission (no JPEG, proper YUV handling)
                 if let payload = message.payload,
@@ -744,6 +832,7 @@ struct MultipeerMessage: Codable {
         case videoFrameWithOrientation
         case pixelBufferFrame  // CVPixelBuffer transmission (raw YUV ~1.3MB/frame)
         case h264Frame  // H.264 compressed frame (10-50KB/frame - WebRTC standard)
+        case h264Chunk  // Chunk of large H.264 keyframe (for reliable transmission)
         case frozenFrame
         case audioData
     }
@@ -757,6 +846,14 @@ struct AnnotationPositionUpdate: Codable {
     let id: String
     let normalizedX: CGFloat
     let normalizedY: CGFloat
+}
+
+/// Chunk metadata for large H.264 keyframe transmission
+struct H264ChunkData: Codable {
+    let chunkID: String          // Unique ID for this frame
+    let chunkIndex: Int          // Index of this chunk (0-based)
+    let totalChunks: Int         // Total number of chunks
+    let chunkData: Data          // This chunk's data
 }
 
 // MARK: - Device Orientation Data
