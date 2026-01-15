@@ -462,9 +462,15 @@ class VideoCodecService: NSObject {
     /// Create format description from SPS/PPS parameter sets
     /// This is needed on the first frame or when stream parameters change
     private func createFormatDescription(from h264Data: Data) -> CMFormatDescription? {
+        // Debug: Log first 20 bytes to see what we received
+        let previewBytes = h264Data.prefix(min(20, h264Data.count))
+        let hexString = previewBytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+        print("[VideoCodec] 🔍 Parsing H.264 data (\(h264Data.count) bytes), first bytes: \(hexString)")
+
         // Parse NAL units to find SPS and PPS
         var spsData: Data?
         var ppsData: Data?
+        var nalTypesFound: [UInt8] = []
 
         var offset = 0
         while offset < h264Data.count - 4 {
@@ -475,6 +481,7 @@ class VideoCodecService: NSObject {
                h264Data[offset + 3] == 0x01 {
 
                 let nalType = h264Data[offset + 4] & 0x1F
+                nalTypesFound.append(nalType)
 
                 // Find next start code or end of data
                 var nalEndOffset = offset + 4
@@ -509,8 +516,11 @@ class VideoCodecService: NSObject {
             }
         }
 
+        print("[VideoCodec] 🔍 NAL unit types found: \(nalTypesFound.map { String($0) }.joined(separator: ", ")) (7=SPS, 8=PPS, 5=IDR, 1=P-frame)")
+
         // Create format description if we have both SPS and PPS
         guard let spsData = spsData, let ppsData = ppsData else {
+            print("[VideoCodec] ⚠️ Missing SPS or PPS - SPS: \(spsData != nil), PPS: \(ppsData != nil)")
             return nil
         }
 
