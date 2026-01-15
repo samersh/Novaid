@@ -22,8 +22,8 @@ struct ProfessionalVideoCallView: View {
                 // Calculate video frame bounds
                 let videoFrame = VideoFrameHelper.calculateVideoFrame(containerSize: geometry.size)
 
-                // Remote video from User's iPhone camera
-                RemoteVideoView()
+                // Remote video from User's iPhone camera (Metal-accelerated)
+                MetalVideoView()
                     .ignoresSafeArea()
 
                 // Annotations overlay - constrained to video area

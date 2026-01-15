@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 
 /// Service for capturing and playing audio during calls
+/// Enhanced with better format handling and buffer management
 @MainActor
 class AudioService: ObservableObject {
     static let shared = AudioService()
@@ -17,6 +18,13 @@ class AudioService: ObservableObject {
     private let audioQueue = DispatchQueue(label: "com.novaid.audioQueue")
     private var isAudioSetup = false
     private var inputFormat: AVAudioFormat?
+
+    // Standard format for transmission (16kHz mono for voice, lower bandwidth)
+    private let transmissionSampleRate: Double = 16000
+    private let transmissionChannels: UInt32 = 1
+
+    // Converter for format conversion
+    private var converter: AVAudioConverter?
 
     private init() {}
 
@@ -59,30 +67,51 @@ class AudioService: ObservableObject {
                 print("[Audio] Setting up audio engine...")
                 let engine = AVAudioEngine()
                 let input = engine.inputNode
-                let format = input.outputFormat(forBus: 0)
-                self.inputFormat = format
-                print("[Audio] Format - Sample Rate: \(format.sampleRate), Channels: \(format.channelCount)")
+                let inputFormat = input.outputFormat(forBus: 0)
+                self.inputFormat = inputFormat
+                print("[Audio] Input Format - Sample Rate: \(inputFormat.sampleRate), Channels: \(inputFormat.channelCount)")
 
-                // Setup player node for playback
+                // Create standard transmission format (16kHz mono PCM)
+                guard let transmissionFormat = AVAudioFormat(
+                    commonFormat: .pcmFormatFloat32,
+                    sampleRate: self.transmissionSampleRate,
+                    channels: self.transmissionChannels,
+                    interleaved: false
+                ) else {
+                    print("[Audio] ❌ Failed to create transmission format")
+                    return
+                }
+                print("[Audio] Transmission Format - Sample Rate: \(transmissionFormat.sampleRate), Channels: \(transmissionFormat.channelCount)")
+
+                // Create converter for format conversion
+                guard let converter = AVAudioConverter(from: inputFormat, to: transmissionFormat) else {
+                    print("[Audio] ❌ Failed to create audio converter")
+                    return
+                }
+                self.converter = converter
+                print("[Audio] ✅ Audio converter created")
+
+                // Setup player node for playback (use transmission format for consistency)
                 let player = AVAudioPlayerNode()
                 engine.attach(player)
-                engine.connect(player, to: engine.mainMixerNode, format: format)
+                engine.connect(player, to: engine.mainMixerNode, format: transmissionFormat)
                 self.playerNode = player
                 player.play()
-                print("[Audio] Player node attached and started")
+                print("[Audio] Player node attached and started with transmission format")
 
-                // Install tap to capture audio - send RAW buffers
-                input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, time in
+                // Install tap to capture audio - convert and send
+                input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
                     guard let self = self, !self.isMuted else { return }
 
-                    // Convert buffer to data and send immediately
-                    if let audioData = self.bufferToData(buffer: buffer) {
+                    // Convert to transmission format and send
+                    if let convertedBuffer = self.convertBuffer(buffer, using: converter, to: transmissionFormat),
+                       let audioData = self.bufferToData(buffer: convertedBuffer, format: transmissionFormat) {
                         Task { @MainActor in
                             MultipeerService.shared.sendAudioData(audioData)
                         }
                     }
                 }
-                print("[Audio] Audio tap installed - capturing audio")
+                print("[Audio] Audio tap installed - capturing and converting audio")
 
                 self.audioEngine = engine
                 self.inputNode = input
@@ -131,18 +160,24 @@ class AudioService: ObservableObject {
         audioQueue.async { [weak self] in
             guard let self = self else { return }
 
-            guard let format = self.inputFormat else {
-                print("[Audio] ⚠️ Audio format not ready")
-                return
-            }
-
             guard let playerNode = self.playerNode else {
                 print("[Audio] ⚠️ Player node not ready")
                 return
             }
 
-            // Convert data back to audio buffer
-            if let buffer = self.dataToBuffer(data: data, format: format) {
+            // Create transmission format (must match sender's format)
+            guard let transmissionFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: self.transmissionSampleRate,
+                channels: self.transmissionChannels,
+                interleaved: false
+            ) else {
+                print("[Audio] ⚠️ Failed to create playback format")
+                return
+            }
+
+            // Convert data back to audio buffer using transmission format
+            if let buffer = self.dataToBuffer(data: data, format: transmissionFormat) {
                 // Schedule buffer for immediate playback
                 playerNode.scheduleBuffer(buffer, completionHandler: nil)
             }
@@ -157,10 +192,43 @@ class AudioService: ObservableObject {
 
     // MARK: - Helper Methods
 
-    /// Convert AVAudioPCMBuffer to Data
-    private func bufferToData(buffer: AVAudioPCMBuffer) -> Data? {
+    /// Convert audio buffer to standard transmission format
+    private func convertBuffer(_ buffer: AVAudioPCMBuffer, using converter: AVAudioConverter, to format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        // Calculate output frame capacity
+        let inputFrameCount = buffer.frameLength
+        let ratio = format.sampleRate / buffer.format.sampleRate
+        let outputFrameCapacity = UInt32(Double(inputFrameCount) * ratio)
+
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: outputFrameCapacity) else {
+            print("[Audio] ⚠️ Failed to create output buffer")
+            return nil
+        }
+
+        var error: NSError?
+        let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        let status = converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
+
+        if status == .error {
+            print("[Audio] ⚠️ Conversion error: \(error?.localizedDescription ?? "unknown")")
+            return nil
+        }
+
+        return outputBuffer
+    }
+
+    /// Convert AVAudioPCMBuffer to Data with format info
+    private func bufferToData(buffer: AVAudioPCMBuffer, format: AVAudioFormat) -> Data? {
         let audioBuffer = buffer.audioBufferList.pointee.mBuffers
-        let data = Data(bytes: audioBuffer.mData!, count: Int(audioBuffer.mDataByteSize))
+        guard let mData = audioBuffer.mData else {
+            print("[Audio] ⚠️ No data in audio buffer")
+            return nil
+        }
+
+        let data = Data(bytes: mData, count: Int(audioBuffer.mDataByteSize))
         return data
     }
 
