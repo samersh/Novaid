@@ -499,15 +499,19 @@ class VideoCodecService: NSObject {
                     nalEndOffset = h264Data.count
                 }
 
-                // Extract NAL unit data (without start code)
-                let nalData = h264Data.subdata(in: (offset + 4)..<nalEndOffset)
+                // Extract NAL unit data (without start code AND without NAL header byte)
+                // CMVideoFormatDescriptionCreateFromH264ParameterSets expects raw RBSP data
+                // offset+4 is the NAL header, offset+5 is where the actual parameter set data starts
+                if nalEndOffset > offset + 5 {
+                    let nalData = h264Data.subdata(in: (offset + 5)..<nalEndOffset)
 
-                if nalType == 7 { // SPS
-                    spsData = nalData
-                    print("[VideoCodec] Found SPS (\(nalData.count) bytes)")
-                } else if nalType == 8 { // PPS
-                    ppsData = nalData
-                    print("[VideoCodec] Found PPS (\(nalData.count) bytes)")
+                    if nalType == 7 { // SPS
+                        spsData = nalData
+                        print("[VideoCodec] Found SPS (\(nalData.count) bytes, raw RBSP data)")
+                    } else if nalType == 8 { // PPS
+                        ppsData = nalData
+                        print("[VideoCodec] Found PPS (\(nalData.count) bytes, raw RBSP data)")
+                    }
                 }
 
                 offset = nalEndOffset
