@@ -207,11 +207,16 @@ struct RemoteVideoView: View {
 
                 // Show frozen frame if available, otherwise show live frame
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
-                    Image(uiImage: frame)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .rotationEffect(.degrees(rotationAngle))
-                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    let shouldRotateFrame = shouldRotateFrame()
+
+                    // When iPhone is landscape, rotate the entire view 90° CCW
+                    Group {
+                        Image(uiImage: frame)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    }
+                    .rotationEffect(.degrees(shouldRotateFrame ? -90 : 0))  // Rotate frame CCW, not content
+                    .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -227,20 +232,17 @@ struct RemoteVideoView: View {
         }
     }
 
-    /// Calculate rotation angle based on iPhone orientation
-    private var rotationAngle: Double {
+    /// Check if frame should be rotated based on iPhone orientation
+    private func shouldRotateFrame() -> Bool {
         let orientation = multipeerService.receivedDeviceOrientation.state
 
         switch orientation {
         case .landscapeRight, .landscapeLeft:
-            // iPhone is landscape → Rotate content 90° clockwise on iPad
-            return 90
-        case .portrait, .portraitUpsideDown:
-            // iPhone is portrait → iPad shows as-is (no rotation)
-            return 0
-        case .unknown:
-            // Default to no rotation
-            return 0
+            // iPhone is landscape → Rotate frame 90° CCW
+            return true
+        case .portrait, .portraitUpsideDown, .unknown:
+            // iPhone is portrait → No rotation
+            return false
         }
     }
 

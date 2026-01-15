@@ -22,21 +22,46 @@ class AudioService: ObservableObject {
 
     /// Start audio capture and transmission
     func startAudioCapture() {
+        print("[Audio] Starting audio capture...")
+
         audioQueue.async { [weak self] in
             guard let self = self else { return }
 
             do {
+                // Check microphone permission
+                let permissionStatus = AVAudioSession.sharedInstance().recordPermission
+                print("[Audio] Microphone permission status: \(permissionStatus.rawValue)")
+
+                if permissionStatus == .denied {
+                    print("[Audio] ERROR: Microphone permission denied!")
+                    return
+                } else if permissionStatus == .undetermined {
+                    print("[Audio] Requesting microphone permission...")
+                    AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                        print("[Audio] Microphone permission granted: \(granted)")
+                        if granted {
+                            // Retry starting audio
+                            self.startAudioCapture()
+                        }
+                    }
+                    return
+                }
+
                 // Configure audio session
+                print("[Audio] Configuring audio session...")
                 let session = AVAudioSession.sharedInstance()
                 try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
                 try session.setActive(true)
                 self.audioSession = session
+                print("[Audio] Audio session activated")
 
                 // Setup audio engine
+                print("[Audio] Setting up audio engine...")
                 let engine = AVAudioEngine()
                 let input = engine.inputNode
                 let format = input.outputFormat(forBus: 0)
                 self.audioFormat = format
+                print("[Audio] Input format: \(format)")
 
                 // Setup player node for playback
                 let player = AVAudioPlayerNode()
@@ -44,6 +69,7 @@ class AudioService: ObservableObject {
                 engine.connect(player, to: engine.mainMixerNode, format: format)
                 self.playerNode = player
                 player.play()
+                print("[Audio] Player node setup complete")
 
                 // Install tap to capture audio
                 input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
@@ -51,26 +77,29 @@ class AudioService: ObservableObject {
 
                     // Convert buffer to data and send
                     if let audioData = self.bufferToData(buffer: buffer) {
+                        print("[Audio] Captured audio buffer: \(audioData.count) bytes")
                         Task { @MainActor in
                             MultipeerService.shared.sendAudioData(audioData)
                         }
                     }
                 }
+                print("[Audio] Audio tap installed")
 
                 self.audioEngine = engine
                 self.inputNode = input
 
                 // Start engine
                 try engine.start()
+                print("[Audio] Audio engine started successfully")
 
                 Task { @MainActor in
                     self.isRecording = true
                     self.isAudioSetup = true
-                    print("[Audio] Audio capture and playback started")
+                    print("[Audio] ✅ Audio capture and playback started")
                 }
 
             } catch {
-                print("[Audio] Failed to start audio capture: \(error)")
+                print("[Audio] ❌ Failed to start audio capture: \(error.localizedDescription)")
             }
         }
     }
@@ -101,14 +130,30 @@ class AudioService: ObservableObject {
     /// Play received audio data
     func playAudioData(_ data: Data) {
         audioQueue.async { [weak self] in
-            guard let self = self,
-                  let format = self.audioFormat,
-                  let playerNode = self.playerNode else { return }
+            guard let self = self else {
+                print("[Audio] ⚠️ Self is nil in playAudioData")
+                return
+            }
+
+            guard let format = self.audioFormat else {
+                print("[Audio] ⚠️ Audio format not set")
+                return
+            }
+
+            guard let playerNode = self.playerNode else {
+                print("[Audio] ⚠️ Player node not available")
+                return
+            }
+
+            print("[Audio] Received audio data: \(data.count) bytes")
 
             // Convert data back to audio buffer
             if let buffer = self.dataToBuffer(data: data, format: format) {
                 // Schedule buffer for playback
                 playerNode.scheduleBuffer(buffer, completionHandler: nil)
+                print("[Audio] ✅ Audio buffer scheduled for playback")
+            } else {
+                print("[Audio] ❌ Failed to convert data to buffer")
             }
         }
     }
