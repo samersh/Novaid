@@ -38,15 +38,46 @@ vertex VertexOut vertex_main(uint vertexID [[vertex_id]]) {
     return out;
 }
 
-/// Fragment shader for video texture rendering
+/// YUV to RGB conversion matrix (BT.709 HDTV standard)
+constant float3x3 kYUVToRGBMatrix = float3x3(
+    float3(1.0,     1.0,    1.0),
+    float3(0.0,    -0.187,  1.856),
+    float3(1.575,  -0.468,  0.0)
+);
+
+/// Fragment shader for BGRA texture rendering
 fragment float4 fragment_main(VertexOut in [[stage_in]],
                                texture2d<float> videoTexture [[texture(0)]]) {
     constexpr sampler textureSampler(mag_filter::linear,
                                      min_filter::linear,
                                      address::clamp_to_edge);
 
-    // Sample the video texture
+    // Sample the video texture (BGRA format)
     float4 color = videoTexture.sample(textureSampler, in.texCoord);
 
     return color;
+}
+
+/// Fragment shader for YUV (NV12) texture rendering
+/// ARKit captures in NV12 format (bi-planar YUV 420)
+/// This fixes the blue color tint issue
+fragment float4 fragment_yuv(VertexOut in [[stage_in]],
+                              texture2d<float> yTexture [[texture(0)]],
+                              texture2d<float> uvTexture [[texture(1)]]) {
+    constexpr sampler textureSampler(mag_filter::linear,
+                                     min_filter::linear,
+                                     address::clamp_to_edge);
+
+    // Sample Y (luma) plane
+    float y = yTexture.sample(textureSampler, in.texCoord).r;
+
+    // Sample UV (chroma) plane
+    float2 uv = uvTexture.sample(textureSampler, in.texCoord).rg;
+
+    // Convert from YUV to RGB
+    // Y: [0, 1], UV: [0, 1] centered at 0.5
+    float3 yuv = float3(y, uv.x - 0.5, uv.y - 0.5);
+    float3 rgb = kYUVToRGBMatrix * yuv;
+
+    return float4(rgb, 1.0);
 }

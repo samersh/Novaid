@@ -13,6 +13,7 @@ class MetalVideoRenderer: UIView {
     private var device: MTLDevice!
     private var commandQueue: MTLCommandQueue!
     private var pipelineState: MTLRenderPipelineState!
+    private var yuvPipelineState: MTLRenderPipelineState!  // For YUV textures
     private var textureCache: CVMetalTextureCache!
     private var displayLink: CADisplayLink?
 
@@ -98,23 +99,39 @@ class MetalVideoRenderer: UIView {
             return
         }
 
-        guard let vertexFunction = library.makeFunction(name: "vertex_main"),
-              let fragmentFunction = library.makeFunction(name: "fragment_main") else {
-            print("[Metal] ❌ Failed to load shader functions")
+        guard let vertexFunction = library.makeFunction(name: "vertex_main") else {
+            print("[Metal] ❌ Failed to load vertex shader")
             return
         }
 
-        // Create render pipeline descriptor
-        let pipelineDescriptor = MTLRenderPipelineDescriptor()
-        pipelineDescriptor.vertexFunction = vertexFunction
-        pipelineDescriptor.fragmentFunction = fragmentFunction
-        pipelineDescriptor.colorAttachments[0].pixelFormat = metalLayer.pixelFormat
+        // Setup BGRA pipeline (for UIImage fallback)
+        if let fragmentFunction = library.makeFunction(name: "fragment_main") {
+            let pipelineDescriptor = MTLRenderPipelineDescriptor()
+            pipelineDescriptor.vertexFunction = vertexFunction
+            pipelineDescriptor.fragmentFunction = fragmentFunction
+            pipelineDescriptor.colorAttachments[0].pixelFormat = metalLayer.pixelFormat
 
-        do {
-            pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
-            print("[Metal] ✅ Render pipeline created")
-        } catch {
-            print("[Metal] ❌ Failed to create pipeline state: \(error)")
+            do {
+                pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+                print("[Metal] ✅ BGRA render pipeline created")
+            } catch {
+                print("[Metal] ❌ Failed to create BGRA pipeline: \(error)")
+            }
+        }
+
+        // Setup YUV pipeline (for direct CVPixelBuffer from ARKit)
+        if let fragmentYUVFunction = library.makeFunction(name: "fragment_yuv") {
+            let yuvDescriptor = MTLRenderPipelineDescriptor()
+            yuvDescriptor.vertexFunction = vertexFunction
+            yuvDescriptor.fragmentFunction = fragmentYUVFunction
+            yuvDescriptor.colorAttachments[0].pixelFormat = metalLayer.pixelFormat
+
+            do {
+                yuvPipelineState = try device.makeRenderPipelineState(descriptor: yuvDescriptor)
+                print("[Metal] ✅ YUV render pipeline created (fixes color issues)")
+            } catch {
+                print("[Metal] ❌ Failed to create YUV pipeline: \(error)")
+            }
         }
     }
 
@@ -167,20 +184,23 @@ class MetalVideoRenderer: UIView {
                 return
             }
 
-            // Create Metal texture from pixel buffer (zero-copy via IOSurface)
-            guard let texture = self.createTexture(from: pixelBuffer) else {
-                print("[Metal] ⚠️ Failed to create texture from pixel buffer")
-                return
-            }
-
             // Get drawable from Metal layer
             guard let drawable = self.metalLayer.nextDrawable() else {
                 print("[Metal] ⚠️ Failed to get next drawable")
                 return
             }
 
-            // Render texture to drawable
-            self.render(texture: texture, to: drawable)
+            // Check pixel format and render accordingly
+            let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+
+            if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+               pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
+                // YUV bi-planar (NV12) - ARKit native format
+                self.renderYUV(pixelBuffer: pixelBuffer, to: drawable)
+            } else {
+                // BGRA or other format - fallback
+                self.renderBGRA(pixelBuffer: pixelBuffer, to: drawable)
+            }
 
             // Track FPS
             self.frameCount += 1
@@ -188,12 +208,94 @@ class MetalVideoRenderer: UIView {
         }
     }
 
-    private func createTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+    /// Render YUV bi-planar pixel buffer (fixes blue color issue)
+    private func renderYUV(pixelBuffer: CVPixelBuffer, to drawable: CAMetalDrawable) {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
 
-        // Create Metal texture from pixel buffer via CVMetalTextureCache
-        // This provides zero-copy access via IOSurface
+        // Create Y texture (luma plane)
+        var yTextureOut: CVMetalTexture?
+        let yResult = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            textureCache,
+            pixelBuffer,
+            nil,
+            .r8Unorm,  // Single channel (Y)
+            width,
+            height,
+            0,  // Plane 0 (Y)
+            &yTextureOut
+        )
+
+        guard yResult == kCVReturnSuccess,
+              let yTexture = yTextureOut,
+              let yMetalTexture = CVMetalTextureGetTexture(yTexture) else {
+            print("[Metal] ⚠️ Failed to create Y texture")
+            return
+        }
+
+        // Create UV texture (chroma plane)
+        var uvTextureOut: CVMetalTexture?
+        let uvResult = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            textureCache,
+            pixelBuffer,
+            nil,
+            .rg8Unorm,  // Two channels (UV)
+            width / 2,
+            height / 2,
+            1,  // Plane 1 (UV)
+            &uvTextureOut
+        )
+
+        guard uvResult == kCVReturnSuccess,
+              let uvTexture = uvTextureOut,
+              let uvMetalTexture = CVMetalTextureGetTexture(uvTexture) else {
+            print("[Metal] ⚠️ Failed to create UV texture")
+            return
+        }
+
+        // Create command buffer
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            print("[Metal] ⚠️ Failed to create command buffer")
+            return
+        }
+
+        // Create render pass descriptor
+        let renderPassDescriptor = MTLRenderPassDescriptor()
+        renderPassDescriptor.colorAttachments[0].texture = drawable.texture
+        renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        renderPassDescriptor.colorAttachments[0].storeAction = .store
+
+        // Create render command encoder
+        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            print("[Metal] ⚠️ Failed to create render encoder")
+            return
+        }
+
+        renderEncoder.setRenderPipelineState(yuvPipelineState)
+
+        // Set YUV textures
+        renderEncoder.setFragmentTexture(yMetalTexture, index: 0)  // Y plane
+        renderEncoder.setFragmentTexture(uvMetalTexture, index: 1)  // UV plane
+
+        // Draw full-screen quad
+        renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+
+        renderEncoder.endEncoding()
+
+        // Present drawable
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+    }
+
+    /// Render BGRA pixel buffer (fallback for UIImage)
+    private func renderBGRA(pixelBuffer: CVPixelBuffer, to drawable: CAMetalDrawable) {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+
+        // Create Metal texture from pixel buffer
         var textureOut: CVMetalTexture?
         let result = CVMetalTextureCacheCreateTextureFromImage(
             kCFAllocatorDefault,
@@ -207,15 +309,13 @@ class MetalVideoRenderer: UIView {
             &textureOut
         )
 
-        if result == kCVReturnSuccess, let cvTexture = textureOut {
-            return CVMetalTextureGetTexture(cvTexture)
-        } else {
-            print("[Metal] ⚠️ Failed to create texture: \(result)")
-            return nil
+        guard result == kCVReturnSuccess,
+              let cvTexture = textureOut,
+              let texture = CVMetalTextureGetTexture(cvTexture) else {
+            print("[Metal] ⚠️ Failed to create BGRA texture")
+            return
         }
-    }
 
-    private func render(texture: MTLTexture, to drawable: CAMetalDrawable) {
         // Create command buffer
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             print("[Metal] ⚠️ Failed to create command buffer")
@@ -289,7 +389,12 @@ struct MetalVideoView: UIViewRepresentable {
         let renderer = MetalVideoRenderer(frame: .zero)
         context.coordinator.renderer = renderer
 
-        // Setup frame update callback
+        // OPTIMIZED: Direct CVPixelBuffer transmission (zero-copy, proper YUV handling)
+        multipeerService.onPixelBufferReceived = { pixelBuffer in
+            renderer.updatePixelBuffer(pixelBuffer)
+        }
+
+        // Fallback: Legacy UIImage frames (DEPRECATED, for backwards compatibility)
         multipeerService.onVideoFrameReceived = { image in
             renderer.updateImage(image)
         }

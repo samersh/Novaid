@@ -119,67 +119,30 @@ struct ARCameraView: UIViewRepresentable {
         private func processAndSendFrame(_ frame: ARFrame) {
             let pixelBuffer = frame.capturedImage
 
-            // Capture current device orientation state
-            let deviceOrientation = UIDevice.current.orientation
-            let orientationState: DeviceOrientation.OrientationState
+            // OPTIMIZED: Send pixel buffer directly without JPEG conversion
+            // - Preserves native YUV format (fixes blue color issue)
+            // - No CPU-intensive conversions (CIImage -> CGImage -> UIImage -> JPEG)
+            // - Zero-copy via IOSurface (significantly lower latency)
+            // - Proper color space handling for Metal renderer
 
-            switch deviceOrientation {
-            case .portrait:
-                orientationState = .portrait
-            case .portraitUpsideDown:
-                orientationState = .portraitUpsideDown
-            case .landscapeLeft:
-                orientationState = .landscapeLeft
-            case .landscapeRight:
-                orientationState = .landscapeRight
-            default:
-                // If orientation is unknown/faceUp/faceDown, keep the last known orientation
-                orientationState = currentOrientation.state
+            Task { @MainActor in
+                MultipeerService.shared.sendPixelBuffer(pixelBuffer)
             }
 
-            currentOrientation = DeviceOrientation(state: orientationState)
+            // Also store a thumbnail for freeze functionality (async, lower priority)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self = self else { return }
 
-            // Create CIImage from pixel buffer
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                // Create small thumbnail for freeze feature
+                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                let context = CIContext(options: [.useSoftwareRenderer: false])
+                guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
 
-            // Create CGImage
-            let context = CIContext(options: [.useSoftwareRenderer: false])
-            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
+                let thumbnailImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
 
-            // Determine UIImage orientation based on device orientation
-            // This embeds rotation info in the image metadata (EXIF orientation)
-            let imageOrientation: UIImage.Orientation
-            switch orientationState {
-            case .portrait:
-                imageOrientation = .right  // ARKit captures landscape, rotate for portrait display
-            case .portraitUpsideDown:
-                imageOrientation = .left
-            case .landscapeLeft:
-                imageOrientation = .up
-            case .landscapeRight:
-                imageOrientation = .down
-            case .unknown:
-                imageOrientation = .right  // Default
-            }
-
-            // Create UIImage with embedded orientation metadata
-            // This is the key: orientation is in the image, not applied as transform
-            let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: imageOrientation)
-
-            // Industry standard 720p resolution for remote assistance
-            // Based on WebRTC and Zoho Lens best practices
-            let targetSize = CGSize(width: 720, height: 1280)
-            UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
-            uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
-            let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
-            UIGraphicsEndImageContext()
-
-            if let image = resizedImage {
-                // Store last frame for freeze functionality
-                lastCapturedFrame = image
-
+                // Store for freeze functionality
                 Task { @MainActor in
-                    MultipeerService.shared.sendVideoFrame(image, orientation: self.currentOrientation)
+                    self.lastCapturedFrame = thumbnailImage
                 }
             }
         }

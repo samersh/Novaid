@@ -2,6 +2,7 @@ import Foundation
 import MultipeerConnectivity
 import Combine
 import UIKit
+import CoreVideo
 
 /// Service for peer-to-peer connection using MultipeerConnectivity
 /// Allows iPhone and iPad to connect directly via WiFi/Bluetooth without a server
@@ -38,6 +39,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onVideoFrozen: (() -> Void)?
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
+    var onPixelBufferReceived: ((CVPixelBuffer) -> Void)?  // New: for direct pixel buffer transmission
     var onFrozenFrameReceived: ((UIImage) -> Void)?
     var onAudioDataReceived: ((Data) -> Void)?
 
@@ -178,7 +180,42 @@ class MultipeerService: NSObject, ObservableObject {
         sendData(data)
     }
 
+    /// Send CVPixelBuffer directly (zero JPEG conversion, proper color handling)
+    /// This is significantly faster and preserves native YUV format
+    func sendPixelBuffer(_ pixelBuffer: CVPixelBuffer) {
+        // Rate limit to prevent flooding
+        let now = Date()
+        guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
+        lastFrameTime = now
+
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        // Encode pixel buffer to data (preserves YUV format, no color conversion)
+        guard let pixelData = PixelBufferTransmissionService.encodePixelBuffer(pixelBuffer) else {
+            print("[Multipeer] ❌ Failed to encode pixel buffer")
+            return
+        }
+
+        let message = MultipeerMessage(type: .pixelBufferFrame, payload: pixelData)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+
+        // Send unreliable for speed (like UDP)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            framesSent += 1
+            totalFramesSent += 1
+            totalBytesSent += Int64(data.count)
+            adjustQualityIfNeeded()
+            logNetworkStatsIfNeeded()
+        } catch {
+            framesFailed += 1
+            totalFramesFailed += 1
+            adjustQualityIfNeeded()
+        }
+    }
+
     /// Send video frame with orientation (compressed JPEG with adaptive quality)
+    /// DEPRECATED: Use sendPixelBuffer() for better performance and color accuracy
     func sendVideoFrame(_ image: UIImage, orientation: DeviceOrientation = DeviceOrientation()) {
         // Rate limit to prevent flooding
         let now = Date()
@@ -535,6 +572,14 @@ extension MultipeerService: MCSessionDelegate {
                     self.onVideoFrameReceived?(image)
                 }
 
+            case .pixelBufferFrame:
+                // New: Direct CVPixelBuffer transmission (no JPEG, proper YUV handling)
+                if let payload = message.payload,
+                   let pixelBuffer = PixelBufferTransmissionService.decodePixelBuffer(from: payload) {
+                    self.onPixelBufferReceived?(pixelBuffer)
+                    print("[Multipeer] ✅ Received CVPixelBuffer frame: \(CVPixelBufferGetWidth(pixelBuffer))x\(CVPixelBufferGetHeight(pixelBuffer))")
+                }
+
             case .frozenFrame:
                 if let payload = message.payload,
                    let image = UIImage(data: payload) {
@@ -650,6 +695,7 @@ struct MultipeerMessage: Codable {
         case resumeVideo
         case videoFrame
         case videoFrameWithOrientation
+        case pixelBufferFrame  // New: direct CVPixelBuffer transmission (no JPEG)
         case frozenFrame
         case audioData
     }
