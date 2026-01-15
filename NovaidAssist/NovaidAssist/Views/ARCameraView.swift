@@ -142,33 +142,12 @@ struct ARCameraView: UIViewRepresentable {
             // Create CIImage from pixel buffer
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
+            // Send RAW camera image without rotation - display as-is
             // ARKit captures in portrait orientation (sensor native)
-            // Determine target size based on device orientation
-            let isPortrait = (orientationState == .portrait || orientationState == .portraitUpsideDown)
-            let targetSize = isPortrait ? CGSize(width: 480, height: 854) : CGSize(width: 854, height: 480)
-
-            // Rotate based on current orientation to match what user sees on screen
-            let rotatedImage: CIImage
-            switch orientationState {
-            case .landscapeRight:
-                // Landscape right: rotate 90° counter-clockwise
-                rotatedImage = ciImage.oriented(.right)
-            case .landscapeLeft:
-                // Landscape left: rotate 90° clockwise
-                rotatedImage = ciImage.oriented(.left)
-            case .portrait:
-                // Portrait: no rotation needed (sensor is already portrait)
-                rotatedImage = ciImage.oriented(.up)
-            case .portraitUpsideDown:
-                // Portrait upside down: rotate 180°
-                rotatedImage = ciImage.oriented(.down)
-            case .unknown:
-                // Default to landscape right
-                rotatedImage = ciImage.oriented(.right)
-            }
+            let targetSize = CGSize(width: 480, height: 854)
 
             let context = CIContext(options: [.useSoftwareRenderer: false])
-            guard let cgImage = context.createCGImage(rotatedImage, from: rotatedImage.extent) else { return }
+            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
 
             // Create UIImage
             let uiImage = UIImage(cgImage: cgImage)
@@ -322,18 +301,29 @@ struct ARCameraView: UIViewRepresentable {
         }
 
         private func createMarkerEntity(color: UIColor) -> Entity {
-            // Create a visible 3D marker
-            let sphere = MeshResource.generateSphere(radius: 0.02)
-            let material = SimpleMaterial(color: color, isMetallic: false)
-            let entity = ModelEntity(mesh: sphere, materials: [material])
+            // Create a 3D marker with enhanced visual effects
+            let containerEntity = Entity()
 
-            // Add outer glow
-            let outerSphere = MeshResource.generateSphere(radius: 0.035)
-            let outerMaterial = SimpleMaterial(color: color.withAlphaComponent(0.3), isMetallic: false)
+            // Inner sphere - solid core with metallic finish
+            let innerSphere = MeshResource.generateSphere(radius: 0.015)
+            var innerMaterial = SimpleMaterial(color: color, isMetallic: true)
+            innerMaterial.roughness = 0.2
+            let innerEntity = ModelEntity(mesh: innerSphere, materials: [innerMaterial])
+            containerEntity.addChild(innerEntity)
+
+            // Middle ring - translucent layer
+            let middleSphere = MeshResource.generateSphere(radius: 0.025)
+            let middleMaterial = SimpleMaterial(color: color.withAlphaComponent(0.5), isMetallic: false)
+            let middleEntity = ModelEntity(mesh: middleSphere, materials: [middleMaterial])
+            containerEntity.addChild(middleEntity)
+
+            // Outer glow - large transparent sphere
+            let outerSphere = MeshResource.generateSphere(radius: 0.04)
+            let outerMaterial = SimpleMaterial(color: color.withAlphaComponent(0.2), isMetallic: false)
             let outerEntity = ModelEntity(mesh: outerSphere, materials: [outerMaterial])
-            entity.addChild(outerEntity)
+            containerEntity.addChild(outerEntity)
 
-            return entity
+            return containerEntity
         }
 
         // MARK: - ARSessionDelegate
@@ -517,24 +507,47 @@ struct ARAnnotationMarker: View {
 
     var body: some View {
         ZStack {
+            // Outer glow
+            Circle()
+                .fill(annotation.swiftUIColor.opacity(0.2))
+                .frame(width: 70, height: 70)
+                .blur(radius: 10)
+
             // Pulsing ring
             Circle()
-                .stroke(annotation.swiftUIColor, lineWidth: 3)
+                .stroke(annotation.swiftUIColor.opacity(0.8), lineWidth: 3)
                 .frame(width: 50, height: 50)
                 .scaleEffect(isAnimating ? 1.8 : 1.0)
                 .opacity(isAnimating ? 0 : 0.7)
 
-            // Middle ring
+            // Middle ring with gradient
             Circle()
-                .stroke(annotation.swiftUIColor, lineWidth: 2)
-                .frame(width: 30, height: 30)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [annotation.swiftUIColor, annotation.swiftUIColor.opacity(0.6)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 3
+                )
+                .frame(width: 35, height: 35)
+                .shadow(color: annotation.swiftUIColor.opacity(0.6), radius: 8, x: 0, y: 4)
 
-            // Center dot
+            // Center dot with radial gradient for 3D depth
             Circle()
-                .fill(annotation.swiftUIColor)
-                .frame(width: 16, height: 16)
+                .fill(
+                    RadialGradient(
+                        colors: [annotation.swiftUIColor.opacity(0.8), annotation.swiftUIColor],
+                        center: .topLeading,
+                        startRadius: 2,
+                        endRadius: 12
+                    )
+                )
+                .frame(width: 20, height: 20)
+                .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 2)
         }
         .position(position)
+        .shadow(color: annotation.swiftUIColor.opacity(0.7), radius: 15, x: 0, y: 7)
         .onAppear {
             withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: false)) {
                 isAnimating = true
