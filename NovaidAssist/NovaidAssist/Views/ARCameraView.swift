@@ -383,6 +383,15 @@ struct ARCameraView: UIViewRepresentable {
                     let normalized = AnnotationPoint.normalized(from: screenPoint, in: bounds.size)
                     manager.updateScreenPosition(for: id, point: normalized)
                     manager.setVisibility(for: id, visible: isOnScreen)
+
+                    // Send position update to iPad for AR tracking
+                    Task { @MainActor in
+                        MultipeerService.shared.sendAnnotationPositionUpdate(
+                            id: id,
+                            normalizedX: normalized.x,
+                            normalizedY: normalized.y
+                        )
+                    }
                 } else {
                     manager.setVisibility(for: id, visible: false)
                 }

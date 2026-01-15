@@ -210,7 +210,6 @@ struct RemoteVideoView: View {
                     Image(uiImage: frame)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .rotationEffect(.degrees(rotationAngle))
                         .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     VStack(spacing: 16) {
@@ -224,23 +223,6 @@ struct RemoteVideoView: View {
                     }
                 }
             }
-        }
-    }
-
-    /// Calculate rotation angle based on iPhone orientation
-    private var rotationAngle: Double {
-        let orientation = multipeerService.receivedDeviceOrientation.state
-
-        switch orientation {
-        case .portrait, .portraitUpsideDown:
-            // iPhone is vertical → Rotate content 90° clockwise on iPad
-            return 90
-        case .landscapeRight, .landscapeLeft:
-            // iPhone is landscape → Rotate content 90° counter-clockwise on iPad
-            return -90
-        case .unknown:
-            // Default to 90°
-            return 90
         }
     }
 

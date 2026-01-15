@@ -18,6 +18,11 @@ class AudioService: ObservableObject {
     private var isAudioSetup = false
     private var audioFormat: AVAudioFormat?
 
+    // Standard format for transmission: 48kHz, mono, float32
+    private lazy var standardFormat: AVAudioFormat? = {
+        return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)
+    }()
+
     private init() {}
 
     /// Start audio capture and transmission
@@ -59,25 +64,30 @@ class AudioService: ObservableObject {
                 print("[Audio] Setting up audio engine...")
                 let engine = AVAudioEngine()
                 let input = engine.inputNode
-                let format = input.outputFormat(forBus: 0)
-                self.audioFormat = format
-                print("[Audio] Input format: \(format)")
+                let inputFormat = input.outputFormat(forBus: 0)
+                self.audioFormat = self.standardFormat
+                print("[Audio] Input format: \(inputFormat)")
+                print("[Audio] Standard transmission format: \(String(describing: self.standardFormat))")
 
                 // Setup player node for playback
                 let player = AVAudioPlayerNode()
                 engine.attach(player)
-                engine.connect(player, to: engine.mainMixerNode, format: format)
+                if let standardFormat = self.standardFormat {
+                    engine.connect(player, to: engine.mainMixerNode, format: standardFormat)
+                }
                 self.playerNode = player
                 player.play()
                 print("[Audio] Player node setup complete")
 
-                // Install tap to capture audio
-                input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
+                // Install tap to capture audio with input format
+                input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
                     guard let self = self, !self.isMuted else { return }
 
-                    // Convert buffer to data and send
-                    if let audioData = self.bufferToData(buffer: buffer) {
-                        print("[Audio] Captured audio buffer: \(audioData.count) bytes")
+                    // Convert buffer to standard format, then to data and send
+                    if let standardFormat = self.standardFormat,
+                       let converter = AVAudioConverter(from: inputFormat, to: standardFormat),
+                       let convertedBuffer = self.convertBuffer(buffer, using: converter, to: standardFormat),
+                       let audioData = self.bufferToData(buffer: convertedBuffer) {
                         Task { @MainActor in
                             MultipeerService.shared.sendAudioData(audioData)
                         }
@@ -190,6 +200,30 @@ class AudioService: ObservableObject {
         }
 
         return buffer
+    }
+
+    /// Convert audio buffer from one format to another
+    private func convertBuffer(_ buffer: AVAudioPCMBuffer, using converter: AVAudioConverter, to format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let frameCount = buffer.frameLength
+        let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+        let outputFrameCapacity = UInt32(Double(frameCount) * ratio)
+
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: outputFrameCapacity) else {
+            return nil
+        }
+
+        var error: NSError?
+        let status = converter.convert(to: outputBuffer, error: &error) { inNumPackets, outStatus in
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        if status == .error {
+            print("[Audio] ❌ Conversion error: \(error?.localizedDescription ?? "unknown")")
+            return nil
+        }
+
+        return outputBuffer
     }
 
     deinit {

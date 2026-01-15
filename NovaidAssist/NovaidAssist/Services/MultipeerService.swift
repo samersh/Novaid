@@ -32,6 +32,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onCallRejected: (() -> Void)?
     var onAnnotationReceived: ((Annotation) -> Void)?
     var onAnnotationUpdated: ((Annotation) -> Void)?
+    var onAnnotationPositionUpdated: ((String, CGFloat, CGFloat) -> Void)?
     var onVideoFrozen: (() -> Void)?
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
@@ -270,6 +271,23 @@ class MultipeerService: NSObject, ObservableObject {
         print("[Multipeer] ✅ Sent annotation update with world position: \(annotation.worldPosition?.debugDescription ?? "none")")
     }
 
+    /// Send lightweight annotation position update for AR tracking
+    func sendAnnotationPositionUpdate(id: String, normalizedX: CGFloat, normalizedY: CGFloat) {
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        let update = AnnotationPositionUpdate(id: id, normalizedX: normalizedX, normalizedY: normalizedY)
+        guard let data = try? JSONEncoder().encode(update) else { return }
+        let message = MultipeerMessage(type: .annotationPositionUpdate, payload: data)
+
+        // Send unreliable for low latency (positions update frequently)
+        do {
+            guard let messageData = try? JSONEncoder().encode(message) else { return }
+            try session.send(messageData, toPeers: session.connectedPeers, with: .unreliable)
+        } catch {
+            // Silently fail for position updates to avoid log spam
+        }
+    }
+
     /// Send freeze video command
     func sendFreezeVideo() {
         let message = MultipeerMessage(type: .freezeVideo, payload: nil)
@@ -369,6 +387,12 @@ extension MultipeerService: MCSessionDelegate {
                    let annotation = try? JSONDecoder().decode(Annotation.self, from: payload) {
                     print("[Multipeer] ✅ Received annotation update with world position: \(annotation.worldPosition?.debugDescription ?? "none")")
                     self.onAnnotationUpdated?(annotation)
+                }
+
+            case .annotationPositionUpdate:
+                if let payload = message.payload,
+                   let update = try? JSONDecoder().decode(AnnotationPositionUpdate.self, from: payload) {
+                    self.onAnnotationPositionUpdated?(update.id, update.normalizedX, update.normalizedY)
                 }
 
             case .freezeVideo:
@@ -504,6 +528,7 @@ struct MultipeerMessage: Codable {
         case callEnded
         case annotation
         case annotationUpdate
+        case annotationPositionUpdate
         case freezeVideo
         case resumeVideo
         case videoFrame
@@ -514,6 +539,13 @@ struct MultipeerMessage: Codable {
 
     let type: MessageType
     let payload: Data?
+}
+
+/// Lightweight position update for AR tracking
+struct AnnotationPositionUpdate: Codable {
+    let id: String
+    let normalizedX: CGFloat
+    let normalizedY: CGFloat
 }
 
 // MARK: - Device Orientation Data

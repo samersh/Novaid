@@ -333,6 +333,17 @@ struct ProfessionalVideoCallView: View {
                 print("[Professional] ✅ Updated annotation \(updatedAnnotation.id) with world position: \(updatedAnnotation.worldPosition?.debugDescription ?? "none")")
             }
         }
+
+        // Handle continuous annotation position updates for AR tracking
+        multipeerService.onAnnotationPositionUpdated = { [self] id, normalizedX, normalizedY in
+            // Update the annotation's position based on AR tracking from iPhone
+            if let index = callManager.annotations.firstIndex(where: { $0.id == id }) {
+                // Update the first point which represents the annotation's position
+                if !callManager.annotations[index].points.isEmpty {
+                    callManager.annotations[index].points[0] = AnnotationPoint(x: normalizedX, y: normalizedY)
+                }
+            }
+        }
     }
 
     private func toggleControls() {
