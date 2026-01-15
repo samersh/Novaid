@@ -288,8 +288,9 @@ class VideoCodecService: NSObject {
             // Add Annex-B start code
             annexBData.append(contentsOf: annexBStartCode)
 
-            // Add NAL data
-            annexBData.append(dataPointer.advanced(by: offset), count: nalLength)
+            // Add NAL data with proper pointer casting
+            let nalPointer = UnsafeRawPointer(dataPointer.advanced(by: offset))
+            annexBData.append(nalPointer.assumingMemoryBound(to: UInt8.self), count: nalLength)
 
             offset += nalLength
         }
