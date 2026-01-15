@@ -311,7 +311,7 @@ struct ARCameraView: UIViewRepresentable {
                     strokeWidth: annotation.strokeWidth,
                     text: annotation.text,
                     animationType: annotation.animationType,
-                    isComplete: annotation.isComplete,
+                    isComplete: true,  // AR-tracked annotations are complete
                     worldPosition: worldPosition
                 )
 
