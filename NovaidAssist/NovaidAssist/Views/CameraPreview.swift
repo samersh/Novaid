@@ -227,18 +227,10 @@ struct RemoteVideoView: View {
         }
     }
 
-    /// Determine content mode based on device orientation
-    /// Landscape: fill screen without stretching
-    /// Portrait: fit to show full frame
+    /// Always use .fit to show full frame without zooming
+    /// This ensures no content is cropped regardless of orientation
     private var contentMode: ContentMode {
-        let orientation = multipeerService.receivedDeviceOrientation.state
-
-        switch orientation {
-        case .landscapeLeft, .landscapeRight:
-            return .fill  // Full screen for landscape
-        case .portrait, .portraitUpsideDown, .unknown:
-            return .fit   // Show full frame for portrait
-        }
+        return .fit  // Always fit to show complete frame
     }
 
     private func calculateVideoFrame(containerSize: CGSize, aspectRatio: CGFloat) -> CGSize {

@@ -9,6 +9,7 @@ struct ProfessionalVideoCallView: View {
     @State private var showControls = true
     @State private var isDrawingMode = false
     @State private var isAudioEnabled = true
+    @State private var isFlashlightOn = false
     @State private var showEndCallAlert = false
     @State private var controlsTimer: Timer?
 
@@ -242,7 +243,13 @@ struct ProfessionalVideoCallView: View {
 
             // Actions
             HStack(spacing: 20) {
-                Button(action: { callManager.clearAnnotations() }) {
+                Button(action: {
+                    callManager.clearAnnotations()
+                    // Also send clear command to iPhone
+                    if multipeerService.isConnected {
+                        multipeerService.sendClearAnnotations()
+                    }
+                }) {
                     Text("Clear All")
                         .font(.caption)
                         .foregroundColor(.red)
@@ -296,6 +303,13 @@ struct ProfessionalVideoCallView: View {
                 icon: "pencil.tip",
                 isActive: isDrawingMode,
                 action: toggleDrawingMode
+            )
+
+            // Flashlight button
+            ControlButton(
+                icon: isFlashlightOn ? "flashlight.on.fill" : "flashlight.off.fill",
+                isActive: isFlashlightOn,
+                action: toggleFlashlight
             )
 
             // End call button
@@ -396,6 +410,13 @@ struct ProfessionalVideoCallView: View {
             showControls = true
         } else {
             startControlsTimer()
+        }
+    }
+
+    private func toggleFlashlight() {
+        isFlashlightOn.toggle()
+        if multipeerService.isConnected {
+            multipeerService.sendToggleFlashlight(on: isFlashlightOn)
         }
     }
 

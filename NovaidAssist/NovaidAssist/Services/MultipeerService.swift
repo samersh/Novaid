@@ -33,6 +33,8 @@ class MultipeerService: NSObject, ObservableObject {
     var onAnnotationReceived: ((Annotation) -> Void)?
     var onAnnotationUpdated: ((Annotation) -> Void)?
     var onAnnotationPositionUpdated: ((String, CGFloat, CGFloat) -> Void)?
+    var onClearAnnotations: (() -> Void)?
+    var onToggleFlashlight: ((Bool) -> Void)?
     var onVideoFrozen: (() -> Void)?
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
@@ -301,6 +303,21 @@ class MultipeerService: NSObject, ObservableObject {
         sendMessage(message)
     }
 
+    /// Send clear all annotations command
+    func sendClearAnnotations() {
+        let message = MultipeerMessage(type: .clearAnnotations, payload: nil)
+        sendMessage(message)
+        print("[Multipeer] Sent clear annotations command")
+    }
+
+    /// Send toggle flashlight command
+    func sendToggleFlashlight(on: Bool) {
+        let payload = try? JSONEncoder().encode(on)
+        let message = MultipeerMessage(type: .toggleFlashlight, payload: payload)
+        sendMessage(message)
+        print("[Multipeer] Sent toggle flashlight command: \(on ? "ON" : "OFF")")
+    }
+
     // MARK: - Cleanup
 
     func stopAll() {
@@ -402,6 +419,17 @@ extension MultipeerService: MCSessionDelegate {
                 if let payload = message.payload,
                    let annotations = try? JSONDecoder().decode([Annotation].self, from: payload) {
                     self.onVideoResumed?(annotations)
+                }
+
+            case .clearAnnotations:
+                print("[Multipeer] Received clear annotations command")
+                self.onClearAnnotations?()
+
+            case .toggleFlashlight:
+                if let payload = message.payload,
+                   let isOn = try? JSONDecoder().decode(Bool.self, from: payload) {
+                    print("[Multipeer] Received toggle flashlight: \(isOn ? "ON" : "OFF")")
+                    self.onToggleFlashlight?(isOn)
                 }
 
             case .videoFrame:
@@ -529,6 +557,8 @@ struct MultipeerMessage: Codable {
         case annotation
         case annotationUpdate
         case annotationPositionUpdate
+        case clearAnnotations
+        case toggleFlashlight
         case freezeVideo
         case resumeVideo
         case videoFrame

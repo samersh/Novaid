@@ -208,12 +208,41 @@ struct UserVideoCallView: View {
             }
             print("[User] Video resumed with \(annotations.count) annotations")
         }
+
+        // Handle clear all annotations command
+        multipeerService.onClearAnnotations = { [self] in
+            arAnnotationManager.clearAll()
+            print("[User] Cleared all annotations from professional command")
+        }
+
+        // Handle flashlight toggle command
+        multipeerService.onToggleFlashlight = { [self] isOn in
+            toggleFlashlightOnDevice(on: isOn)
+            print("[User] Flashlight toggled: \(isOn ? "ON" : "OFF")")
+        }
     }
 
     private func setupAudioCallbacks() {
         // Handle incoming audio data from professional
         multipeerService.onAudioDataReceived = { [self] audioData in
             audioService.playAudioData(audioData)
+        }
+    }
+
+    private func toggleFlashlightOnDevice(on: Bool) {
+        guard let device = AVCaptureDevice.default(for: .video),
+              device.hasTorch else {
+            print("[User] Flashlight not available on this device")
+            return
+        }
+
+        do {
+            try device.lockForConfiguration()
+            device.torchMode = on ? .on : .off
+            device.unlockForConfiguration()
+            print("[User] Flashlight \(on ? "enabled" : "disabled")")
+        } catch {
+            print("[User] Failed to toggle flashlight: \(error)")
         }
     }
 
