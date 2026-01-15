@@ -12,6 +12,7 @@ class VideoCodecService: NSObject {
     // MARK: - Encoder Properties
     private var encodingSession: VTCompressionSession?
     private let encodingQueue = DispatchQueue(label: "com.novaid.videoEncoding", qos: .userInitiated)
+    private var encodedFrameCount: Int64 = 0
 
     // MARK: - Decoder Properties
     private var decodingSession: VTDecompressionSession?
@@ -159,13 +160,24 @@ class VideoCodecService: NSObject {
             return
         }
 
-        encodingQueue.async {
+        encodingQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            // Force keyframe on first frame and every 60 frames (2 seconds @ 30fps)
+            var frameProperties: [CFString: Any]? = nil
+            if self.encodedFrameCount == 0 || self.encodedFrameCount % 60 == 0 {
+                frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue]
+                print("[VideoCodec] 🔑 Forcing keyframe at frame \(self.encodedFrameCount)")
+            }
+
+            self.encodedFrameCount += 1
+
             let status = VTCompressionSessionEncodeFrame(
                 session,
                 imageBuffer: pixelBuffer,
                 presentationTimeStamp: presentationTime,
                 duration: .invalid,
-                frameProperties: nil,
+                frameProperties: frameProperties as CFDictionary?,
                 sourceFrameRefcon: nil,
                 infoFlagsOut: nil
             )
@@ -238,6 +250,7 @@ class VideoCodecService: NSObject {
 
         // For keyframes, prepend SPS/PPS
         if isKeyframe {
+            print("[VideoCodec] 🔑 Processing keyframe - adding SPS/PPS")
             if let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) {
                 // Get SPS
                 var spsPointer: UnsafePointer<UInt8>?
@@ -254,6 +267,9 @@ class VideoCodecService: NSObject {
                 if spsStatus == noErr, let spsPointer = spsPointer, spsSize > 0 {
                     annexBData.append(contentsOf: annexBStartCode)
                     annexBData.append(spsPointer, count: spsSize)
+                    print("[VideoCodec] ✅ Added SPS (\(spsSize) bytes) to keyframe")
+                } else {
+                    print("[VideoCodec] ❌ Failed to extract SPS: \(spsStatus)")
                 }
 
                 // Get PPS
@@ -271,7 +287,12 @@ class VideoCodecService: NSObject {
                 if ppsStatus == noErr, let ppsPointer = ppsPointer, ppsSize > 0 {
                     annexBData.append(contentsOf: annexBStartCode)
                     annexBData.append(ppsPointer, count: ppsSize)
+                    print("[VideoCodec] ✅ Added PPS (\(ppsSize) bytes) to keyframe")
+                } else {
+                    print("[VideoCodec] ❌ Failed to extract PPS: \(ppsStatus)")
                 }
+            } else {
+                print("[VideoCodec] ❌ No format description for keyframe")
             }
         }
 
