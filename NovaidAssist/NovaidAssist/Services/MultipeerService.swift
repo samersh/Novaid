@@ -170,8 +170,8 @@ class MultipeerService: NSObject, ObservableObject {
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Compress to JPEG with balanced quality for good visual fidelity
-        guard let jpegData = image.jpegData(compressionQuality: 0.6) else { return }
+        // Optimized compression for fast streaming with good quality
+        guard let jpegData = image.jpegData(compressionQuality: 0.5) else { return }
 
         // Create video frame with orientation message
         let frameData = VideoFrameData(imageData: jpegData, orientation: orientation)
@@ -192,8 +192,8 @@ class MultipeerService: NSObject, ObservableObject {
     func sendFrozenFrame(_ image: UIImage) {
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Compress to JPEG with high quality for frozen frame (for annotation drawing)
-        guard let jpegData = image.jpegData(compressionQuality: 0.85) else { return }
+        // Compress to JPEG with good quality for frozen frame (for annotation drawing)
+        guard let jpegData = image.jpegData(compressionQuality: 0.75) else { return }
 
         let message = MultipeerMessage(type: .frozenFrame, payload: jpegData)
         guard let data = try? JSONEncoder().encode(message) else { return }
