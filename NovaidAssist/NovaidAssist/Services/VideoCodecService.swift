@@ -277,13 +277,24 @@ class VideoCodecService: NSObject {
 
         // Convert AVCC NAL units to Annex-B
         var offset = 0
-        while offset < length {
+        while offset + 4 < length {  // Ensure we have at least 4 bytes for length prefix
             // Read 4-byte length prefix (AVCC format)
+            guard offset + 4 <= length else {
+                print("[VideoCodec] ⚠️ Not enough data for NAL length at offset \(offset)")
+                break
+            }
+
             let nalLength = Int(dataPointer.advanced(by: offset).withMemoryRebound(to: UInt32.self, capacity: 1) {
                 $0.pointee.bigEndian
             })
 
             offset += 4
+
+            // Verify we have enough data for the NAL unit
+            guard offset + nalLength <= length else {
+                print("[VideoCodec] ⚠️ NAL length \(nalLength) exceeds available data at offset \(offset)")
+                break
+            }
 
             // Add Annex-B start code
             annexBData.append(contentsOf: annexBStartCode)
