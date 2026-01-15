@@ -277,22 +277,20 @@ class VideoCodecService: NSObject {
 
         // Convert AVCC NAL units to Annex-B
         var offset = 0
-        while offset + 4 < length {  // Ensure we have at least 4 bytes for length prefix
-            // Read 4-byte length prefix (AVCC format)
-            guard offset + 4 <= length else {
-                print("[VideoCodec] ⚠️ Not enough data for NAL length at offset \(offset)")
-                break
-            }
-
-            let nalLength = Int(dataPointer.advanced(by: offset).withMemoryRebound(to: UInt32.self, capacity: 1) {
-                $0.pointee.bigEndian
-            })
+        while offset + 4 <= length {  // Ensure we have at least 4 bytes for length prefix
+            // Read 4-byte length prefix (AVCC format) - big endian
+            // Read byte-by-byte to avoid alignment issues
+            let byte0 = UInt32(UInt8(bitPattern: dataPointer[offset]))
+            let byte1 = UInt32(UInt8(bitPattern: dataPointer[offset + 1]))
+            let byte2 = UInt32(UInt8(bitPattern: dataPointer[offset + 2]))
+            let byte3 = UInt32(UInt8(bitPattern: dataPointer[offset + 3]))
+            let nalLength = Int((byte0 << 24) | (byte1 << 16) | (byte2 << 8) | byte3)
 
             offset += 4
 
             // Verify we have enough data for the NAL unit
-            guard offset + nalLength <= length else {
-                print("[VideoCodec] ⚠️ NAL length \(nalLength) exceeds available data at offset \(offset)")
+            guard nalLength > 0 && offset + nalLength <= length else {
+                print("[VideoCodec] ⚠️ Invalid NAL length \(nalLength) at offset \(offset), total length: \(length)")
                 break
             }
 
