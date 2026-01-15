@@ -236,8 +236,8 @@ struct RemoteVideoView: View {
             // iPhone is vertical → Rotate content 90° clockwise on iPad
             return 90
         case .landscapeRight, .landscapeLeft:
-            // iPhone is landscape → Rotate content 180° clockwise on iPad
-            return 180
+            // iPhone is landscape → Rotate content 90° counter-clockwise on iPad
+            return -90
         case .unknown:
             // Default to 90°
             return 90
