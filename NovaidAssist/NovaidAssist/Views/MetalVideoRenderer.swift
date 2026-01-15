@@ -62,7 +62,7 @@ class MetalVideoRenderer: UIView {
         metalLayer.device = device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = false // Allow readback for debugging
-        metalLayer.displaySyncEnabled = true // Enable vsync for smooth rendering
+        // Note: displaySyncEnabled is macOS only. On iOS, VSync is handled via CADisplayLink
         metalLayer.maximumDrawableCount = 2 // Double buffering for lower latency
         metalLayer.frame = bounds
         layer.addSublayer(metalLayer)
