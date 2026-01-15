@@ -121,6 +121,11 @@ class AudioService: ObservableObject {
     }
 
     deinit {
-        stopAudioCapture()
+        // Cleanup audio resources
+        audioQueue.sync {
+            self.inputNode?.removeTap(onBus: 0)
+            self.audioEngine?.stop()
+            try? self.audioSession?.setActive(false)
+        }
     }
 }
