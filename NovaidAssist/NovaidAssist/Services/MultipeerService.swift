@@ -31,6 +31,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onCallAccepted: (() -> Void)?
     var onCallRejected: (() -> Void)?
     var onAnnotationReceived: ((Annotation) -> Void)?
+    var onAnnotationUpdated: ((Annotation) -> Void)?
     var onVideoFrozen: (() -> Void)?
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
@@ -258,6 +259,17 @@ class MultipeerService: NSObject, ObservableObject {
         sendMessage(message)
     }
 
+    /// Send annotation update with AR world position
+    func sendAnnotationUpdate(_ annotation: Annotation) {
+        guard let data = try? JSONEncoder().encode(annotation) else {
+            print("[Multipeer] ❌ Failed to encode annotation update")
+            return
+        }
+        let message = MultipeerMessage(type: .annotationUpdate, payload: data)
+        sendMessage(message)
+        print("[Multipeer] ✅ Sent annotation update with world position: \(annotation.worldPosition?.debugDescription ?? "none")")
+    }
+
     /// Send freeze video command
     func sendFreezeVideo() {
         let message = MultipeerMessage(type: .freezeVideo, payload: nil)
@@ -350,6 +362,13 @@ extension MultipeerService: MCSessionDelegate {
                 if let payload = message.payload,
                    let annotation = try? JSONDecoder().decode(Annotation.self, from: payload) {
                     self.onAnnotationReceived?(annotation)
+                }
+
+            case .annotationUpdate:
+                if let payload = message.payload,
+                   let annotation = try? JSONDecoder().decode(Annotation.self, from: payload) {
+                    print("[Multipeer] ✅ Received annotation update with world position: \(annotation.worldPosition?.debugDescription ?? "none")")
+                    self.onAnnotationUpdated?(annotation)
                 }
 
             case .freezeVideo:
@@ -484,6 +503,7 @@ struct MultipeerMessage: Codable {
         case callRejected
         case callEnded
         case annotation
+        case annotationUpdate
         case freezeVideo
         case resumeVideo
         case videoFrame

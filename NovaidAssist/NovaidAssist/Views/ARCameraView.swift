@@ -299,6 +299,26 @@ struct ARCameraView: UIViewRepresentable {
             arView.scene.addAnchor(anchor)
             annotationAnchors[annotation.id] = anchor
             annotationManager?.setWorldPosition(for: annotation.id, position: worldPosition)
+
+            // Send annotation update back to iPad with AR world position
+            Task { @MainActor in
+                // Create updated annotation with world position
+                var updatedAnnotation = Annotation(
+                    id: annotation.id,
+                    type: annotation.type,
+                    points: annotation.points,
+                    color: annotation.color,
+                    strokeWidth: annotation.strokeWidth,
+                    text: annotation.text,
+                    animationType: annotation.animationType,
+                    isComplete: annotation.isComplete,
+                    worldPosition: worldPosition
+                )
+
+                // Send back to iPad so it has the AR coordinates
+                MultipeerService.shared.sendAnnotationUpdate(updatedAnnotation)
+                print("[AR] ✅ Sent annotation update to iPad with world position: \(worldPosition)")
+            }
         }
 
         private func createMarkerEntity(color: UIColor) -> Entity {

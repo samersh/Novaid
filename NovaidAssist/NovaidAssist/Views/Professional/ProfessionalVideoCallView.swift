@@ -324,6 +324,15 @@ struct ProfessionalVideoCallView: View {
         multipeerService.onAudioDataReceived = { [self] audioData in
             audioService.playAudioData(audioData)
         }
+
+        // Handle annotation updates with AR world positions from iPhone
+        multipeerService.onAnnotationUpdated = { [self] updatedAnnotation in
+            // Find and update the existing annotation with world position
+            if let index = callManager.annotations.firstIndex(where: { $0.id == updatedAnnotation.id }) {
+                callManager.annotations[index] = updatedAnnotation
+                print("[Professional] ✅ Updated annotation \(updatedAnnotation.id) with world position: \(updatedAnnotation.worldPosition?.debugDescription ?? "none")")
+            }
+        }
     }
 
     private func toggleControls() {
