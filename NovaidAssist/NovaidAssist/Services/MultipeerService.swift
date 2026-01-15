@@ -183,20 +183,29 @@ class MultipeerService: NSObject, ObservableObject {
 
     /// Send H.264 compressed frame (WebRTC-style, 20-100x smaller than raw pixels)
     /// This is the FASTEST method - industry standard for real-time video
-    func sendH264Data(_ h264Data: Data) {
-        // Rate limit to prevent flooding
-        let now = Date()
-        guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
-        lastFrameTime = now
+    func sendH264Data(_ h264Data: Data, isKeyframe: Bool = false) {
+        // Don't rate limit keyframes - they're critical for decoder initialization
+        if !isKeyframe {
+            let now = Date()
+            guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
+            lastFrameTime = now
+        }
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
         let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
         guard let data = try? JSONEncoder().encode(message) else { return }
 
-        // Send unreliable for speed (UDP-style - WebRTC approach)
+        // CRITICAL: Send keyframes reliably (TCP-like) to ensure delivery
+        // Regular frames sent unreliably (UDP-like) for speed
+        let sendMode: MCSessionSendDataMode = isKeyframe ? .reliable : .unreliable
+
+        if isKeyframe {
+            print("[Multipeer] 🔑 Sending KEYFRAME reliably: \(data.count) bytes")
+        }
+
         do {
-            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            try session.send(data, toPeers: session.connectedPeers, with: sendMode)
             framesSent += 1
             totalFramesSent += 1
             totalBytesSent += Int64(data.count)

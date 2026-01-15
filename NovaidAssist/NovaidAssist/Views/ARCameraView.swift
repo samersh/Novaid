@@ -101,8 +101,8 @@ struct ARCameraView: UIViewRepresentable {
                 print("[AR] ✅ H.264 hardware encoder setup (720p @ 30fps)")
 
                 // Setup callback for encoded frames
-                videoCodec.onEncodedFrame = { [weak self] (h264Data: Data, presentationTime: CMTime) in
-                    self?.sendH264Frame(h264Data)
+                videoCodec.onEncodedFrame = { [weak self] (h264Data: Data, presentationTime: CMTime, isKeyframe: Bool) in
+                    self?.sendH264Frame(h264Data, isKeyframe: isKeyframe)
                 }
             } else {
                 print("[AR] ❌ Failed to setup H.264 encoder, falling back to pixel buffer transmission")
@@ -179,9 +179,9 @@ struct ARCameraView: UIViewRepresentable {
             }
         }
 
-        private func sendH264Frame(_ h264Data: Data) {
+        private func sendH264Frame(_ h264Data: Data, isKeyframe: Bool) {
             Task { @MainActor in
-                MultipeerService.shared.sendH264Data(h264Data)
+                MultipeerService.shared.sendH264Data(h264Data, isKeyframe: isKeyframe)
             }
         }
 

@@ -37,7 +37,7 @@ class VideoCodecService: NSObject {
     private var lastBitrateAdjustment: Date = Date()
 
     // Callbacks
-    var onEncodedFrame: ((Data, CMTime) -> Void)?
+    var onEncodedFrame: ((Data, CMTime, Bool) -> Void)?  // Data, presentationTime, isKeyframe
     var onDecodedFrame: ((CVPixelBuffer) -> Void)?
 
     private override init() {
@@ -330,9 +330,9 @@ class VideoCodecService: NSObject {
         // Get presentation time
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
-        // Call callback on main thread
+        // Call callback on main thread with keyframe flag
         Task { @MainActor in
-            service.onEncodedFrame?(annexBData, presentationTime)
+            service.onEncodedFrame?(annexBData, presentationTime, isKeyframe)
         }
     }
 
