@@ -209,8 +209,9 @@ struct RemoteVideoView: View {
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
                     Image(uiImage: frame)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .aspectRatio(contentMode: contentMode)
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -223,6 +224,20 @@ struct RemoteVideoView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Determine content mode based on device orientation
+    /// Landscape: fill screen without stretching
+    /// Portrait: fit to show full frame
+    private var contentMode: ContentMode {
+        let orientation = multipeerService.receivedDeviceOrientation.state
+
+        switch orientation {
+        case .landscapeLeft, .landscapeRight:
+            return .fill  // Full screen for landscape
+        case .portrait, .portraitUpsideDown, .unknown:
+            return .fit   // Show full frame for portrait
         }
     }
 
