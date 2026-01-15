@@ -166,9 +166,9 @@ struct ARCameraView: UIViewRepresentable {
             // This is the key: orientation is in the image, not applied as transform
             let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: imageOrientation)
 
-            // Optimized resolution for fast streaming with good quality
-            // 640x1138 provides clear video while keeping data size manageable
-            let targetSize = CGSize(width: 640, height: 1138)
+            // Lower resolution optimized for minimal latency
+            // 540x960 provides good quality with fast transmission
+            let targetSize = CGSize(width: 540, height: 960)
             UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
             uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()

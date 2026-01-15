@@ -170,8 +170,8 @@ class MultipeerService: NSObject, ObservableObject {
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Optimized compression for fast streaming with good quality
-        guard let jpegData = image.jpegData(compressionQuality: 0.5) else { return }
+        // Lower compression for faster encoding and minimal latency
+        guard let jpegData = image.jpegData(compressionQuality: 0.4) else { return }
 
         // Create video frame with orientation message
         let frameData = VideoFrameData(imageData: jpegData, orientation: orientation)
