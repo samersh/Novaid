@@ -72,7 +72,15 @@ struct ARCameraView: UIViewRepresentable {
         var isVideoFrozen = false
         private var lastCapturedFrame: UIImage?
 
+        // H.264 encoder for WebRTC-style low-latency transmission (20-100x smaller than raw pixels)
+        private let videoCodec = VideoCodecService.shared
+        private var isEncoderSetup = false
+        private var frameNumber: Int64 = 0
+
         func startFrameStreaming() {
+            // Setup H.264 hardware encoder for WebRTC-style transmission
+            setupH264Encoder()
+
             frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
                 self?.captureAndSendFrame()
             }
@@ -80,6 +88,25 @@ struct ARCameraView: UIViewRepresentable {
             // Enable device orientation notifications
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             print("[AR] Device orientation tracking started")
+        }
+
+        private func setupH264Encoder() {
+            guard !isEncoderSetup else { return }
+
+            // Setup H.264 encoder with 720p @ 30fps (WebRTC standard)
+            let success = videoCodec.setupEncoder(width: 720, height: 1280)
+
+            if success {
+                isEncoderSetup = true
+                print("[AR] ✅ H.264 hardware encoder setup (720p @ 30fps)")
+
+                // Setup callback for encoded frames
+                videoCodec.onEncodedFrame = { [weak self] h264Data, presentationTime in
+                    self?.sendH264Frame(h264Data)
+                }
+            } else {
+                print("[AR] ❌ Failed to setup H.264 encoder, falling back to pixel buffer transmission")
+            }
         }
 
         func freezeVideo() {
@@ -119,31 +146,42 @@ struct ARCameraView: UIViewRepresentable {
         private func processAndSendFrame(_ frame: ARFrame) {
             let pixelBuffer = frame.capturedImage
 
-            // OPTIMIZED: Send pixel buffer directly without JPEG conversion
-            // - Preserves native YUV format (fixes blue color issue)
-            // - No CPU-intensive conversions (CIImage -> CGImage -> UIImage -> JPEG)
-            // - Zero-copy via IOSurface (significantly lower latency)
-            // - Proper color space handling for Metal renderer
+            if isEncoderSetup {
+                // WebRTC-STYLE: H.264 hardware encoding (20-100x smaller than raw pixels)
+                // - 1.3MB raw pixel data → 10-50KB H.264 compressed
+                // - Hardware accelerated (GPU) - near zero CPU overhead
+                // - Dramatically lower latency due to smaller data size
+                // - Industry standard for real-time video (WebRTC, Zoom, etc.)
 
-            Task { @MainActor in
-                MultipeerService.shared.sendPixelBuffer(pixelBuffer)
+                let presentationTime = CMTime(seconds: Double(frameNumber) / 30.0, preferredTimescale: 600)
+                videoCodec.encode(pixelBuffer: pixelBuffer, presentationTime: presentationTime)
+                frameNumber += 1
+            } else {
+                // Fallback: Send pixel buffer directly (only if H.264 encoder failed)
+                Task { @MainActor in
+                    MultipeerService.shared.sendPixelBuffer(pixelBuffer)
+                }
             }
 
-            // Also store a thumbnail for freeze functionality (async, lower priority)
+            // Store thumbnail for freeze functionality (async, low priority)
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 guard let self = self else { return }
 
-                // Create small thumbnail for freeze feature
                 let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
                 let context = CIContext(options: [.useSoftwareRenderer: false])
                 guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
 
                 let thumbnailImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
 
-                // Store for freeze functionality
                 Task { @MainActor in
                     self.lastCapturedFrame = thumbnailImage
                 }
+            }
+        }
+
+        private func sendH264Frame(_ h264Data: Data) {
+            Task { @MainActor in
+                MultipeerService.shared.sendH264Data(h264Data)
             }
         }
 

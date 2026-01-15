@@ -40,6 +40,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
     var onPixelBufferReceived: ((CVPixelBuffer) -> Void)?  // New: for direct pixel buffer transmission
+    var onH264DataReceived: ((Data) -> Void)?  // H.264 compressed frames (WebRTC-style, 20-100x smaller)
     var onFrozenFrameReceived: ((UIImage) -> Void)?
     var onAudioDataReceived: ((Data) -> Void)?
 
@@ -180,8 +181,36 @@ class MultipeerService: NSObject, ObservableObject {
         sendData(data)
     }
 
+    /// Send H.264 compressed frame (WebRTC-style, 20-100x smaller than raw pixels)
+    /// This is the FASTEST method - industry standard for real-time video
+    func sendH264Data(_ h264Data: Data) {
+        // Rate limit to prevent flooding
+        let now = Date()
+        guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
+        lastFrameTime = now
+
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+
+        // Send unreliable for speed (UDP-style - WebRTC approach)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            framesSent += 1
+            totalFramesSent += 1
+            totalBytesSent += Int64(data.count)
+            adjustQualityIfNeeded()
+            logNetworkStatsIfNeeded()
+        } catch {
+            framesFailed += 1
+            totalFramesFailed += 1
+            adjustQualityIfNeeded()
+        }
+    }
+
     /// Send CVPixelBuffer directly (zero JPEG conversion, proper color handling)
-    /// This is significantly faster and preserves native YUV format
+    /// DEPRECATED: Use H.264 for much better performance (20-100x smaller data)
     func sendPixelBuffer(_ pixelBuffer: CVPixelBuffer) {
         // Rate limit to prevent flooding
         let now = Date()
@@ -572,8 +601,15 @@ extension MultipeerService: MCSessionDelegate {
                     self.onVideoFrameReceived?(image)
                 }
 
+            case .h264Frame:
+                // WebRTC-STYLE: H.264 compressed frame (20-100x smaller, industry standard)
+                if let payload = message.payload {
+                    self.onH264DataReceived?(payload)
+                    // print("[Multipeer] ✅ Received H.264 frame: \(payload.count) bytes")
+                }
+
             case .pixelBufferFrame:
-                // New: Direct CVPixelBuffer transmission (no JPEG, proper YUV handling)
+                // Fallback: Direct CVPixelBuffer transmission (no JPEG, proper YUV handling)
                 if let payload = message.payload,
                    let pixelBuffer = PixelBufferTransmissionService.decodePixelBuffer(from: payload) {
                     self.onPixelBufferReceived?(pixelBuffer)
@@ -695,7 +731,8 @@ struct MultipeerMessage: Codable {
         case resumeVideo
         case videoFrame
         case videoFrameWithOrientation
-        case pixelBufferFrame  // New: direct CVPixelBuffer transmission (no JPEG)
+        case pixelBufferFrame  // CVPixelBuffer transmission (raw YUV ~1.3MB/frame)
+        case h264Frame  // H.264 compressed frame (10-50KB/frame - WebRTC standard)
         case frozenFrame
         case audioData
     }
