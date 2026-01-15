@@ -23,7 +23,7 @@ class PixelBufferTransmissionService {
             width: Int32(width),
             height: Int32(height),
             pixelFormat: pixelFormat,
-            planeCount: CVPixelBufferGetPlaneCount(pixelBuffer)
+            planeCount: Int32(CVPixelBufferGetPlaneCount(pixelBuffer))
         )
 
         var data = Data()
