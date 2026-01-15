@@ -5,7 +5,7 @@ import CoreMedia
 
 /// Hardware-accelerated H.264 video encoding and decoding service
 /// Based on WebRTC and Zoho Lens best practices
-@MainActor
+/// Thread-safe: Uses dedicated encoding/decoding queues
 class VideoCodecService: NSObject {
     static let shared = VideoCodecService()
 
