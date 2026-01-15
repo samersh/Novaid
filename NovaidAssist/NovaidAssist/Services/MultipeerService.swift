@@ -604,8 +604,10 @@ extension MultipeerService: MCSessionDelegate {
             case .h264Frame:
                 // WebRTC-STYLE: H.264 compressed frame (20-100x smaller, industry standard)
                 if let payload = message.payload {
+                    print("[Multipeer] 📥 Received H.264 frame: \(payload.count) bytes")
                     self.onH264DataReceived?(payload)
-                    // print("[Multipeer] ✅ Received H.264 frame: \(payload.count) bytes")
+                } else {
+                    print("[Multipeer] ⚠️ H.264 frame message has no payload")
                 }
 
             case .pixelBufferFrame:

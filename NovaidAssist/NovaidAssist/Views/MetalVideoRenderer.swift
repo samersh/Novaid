@@ -154,11 +154,18 @@ class MetalVideoRenderer: UIView {
     func updatePixelBuffer(_ pixelBuffer: CVPixelBuffer) {
         renderQueue.async { [weak self] in
             guard let self = self else { return }
+
+            let width = CVPixelBufferGetWidth(pixelBuffer)
+            let height = CVPixelBufferGetHeight(pixelBuffer)
+
+            // Log first frame and periodically
+            if self.currentPixelBuffer == nil {
+                print("[Metal] 🎬 First pixel buffer received: \(width)x\(height)")
+            }
+
             self.currentPixelBuffer = pixelBuffer
 
             // Update aspect ratio based on pixel buffer dimensions
-            let width = CVPixelBufferGetWidth(pixelBuffer)
-            let height = CVPixelBufferGetHeight(pixelBuffer)
             DispatchQueue.main.async {
                 self.videoAspectRatio = CGFloat(width) / CGFloat(height)
             }
