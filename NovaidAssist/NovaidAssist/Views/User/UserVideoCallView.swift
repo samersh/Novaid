@@ -4,6 +4,7 @@ import AVFoundation
 struct UserVideoCallView: View {
     @StateObject private var multipeerService = MultipeerService.shared
     @StateObject private var arAnnotationManager = ARAnnotationManager()
+    @StateObject private var audioService = AudioService.shared
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -47,12 +48,17 @@ struct UserVideoCallView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             setupAnnotationCallbacks()
+            setupAudioCallbacks()
+            // Start audio capture
+            audioService.startAudioCapture()
         }
         .onDisappear {
             // Re-enable screen sleep
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             OrientationManager.shared.unlock()
+            // Stop audio capture
+            audioService.stopAudioCapture()
         }
         .alert("End Call", isPresented: $showEndCallAlert) {
             Button("Cancel", role: .cancel) { }
@@ -202,6 +208,42 @@ struct UserVideoCallView: View {
             }
             print("[User] Video resumed with \(annotations.count) annotations")
         }
+
+        // Handle clear all annotations command
+        multipeerService.onClearAnnotations = { [self] in
+            arAnnotationManager.clearAll()
+            print("[User] Cleared all annotations from professional command")
+        }
+
+        // Handle flashlight toggle command
+        multipeerService.onToggleFlashlight = { [self] isOn in
+            toggleFlashlightOnDevice(on: isOn)
+            print("[User] Flashlight toggled: \(isOn ? "ON" : "OFF")")
+        }
+    }
+
+    private func setupAudioCallbacks() {
+        // Handle incoming audio data from professional
+        multipeerService.onAudioDataReceived = { [self] audioData in
+            audioService.playAudioData(audioData)
+        }
+    }
+
+    private func toggleFlashlightOnDevice(on: Bool) {
+        guard let device = AVCaptureDevice.default(for: .video),
+              device.hasTorch else {
+            print("[User] Flashlight not available on this device")
+            return
+        }
+
+        do {
+            try device.lockForConfiguration()
+            device.torchMode = on ? .on : .off
+            device.unlockForConfiguration()
+            print("[User] Flashlight \(on ? "enabled" : "disabled")")
+        } catch {
+            print("[User] Failed to toggle flashlight: \(error)")
+        }
     }
 
     private func toggleControls() {
@@ -224,6 +266,7 @@ struct UserVideoCallView: View {
 
     private func toggleAudio() {
         isAudioEnabled.toggle()
+        audioService.setMuted(!isAudioEnabled)
     }
 
     private func toggleVideo() {

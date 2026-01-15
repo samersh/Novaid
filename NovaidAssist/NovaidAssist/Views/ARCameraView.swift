@@ -1,7 +1,6 @@
 import SwiftUI
 import ARKit
 import RealityKit
-import CoreMotion
 
 /// AR Camera view for the User side with proper landscape video streaming and world tracking
 struct ARCameraView: UIViewRepresentable {
@@ -67,23 +66,46 @@ struct ARCameraView: UIViewRepresentable {
         private let frameQueue = DispatchQueue(label: "com.novaid.arFrameQueue")
         private var isSessionReady = false
         private var lastFrameTime: Date = Date()
-        private let minFrameInterval: TimeInterval = 1.0 / 15.0
+        private let minFrameInterval: TimeInterval = 1.0 / 30.0  // 30 FPS for smoother video
         private var detectedPlanes: [UUID: ARPlaneAnchor] = [:]
-        private let motionManager = CMMotionManager()
         private var currentOrientation = DeviceOrientation()
         var isVideoFrozen = false
         private var lastCapturedFrame: UIImage?
 
+        // H.264 encoder for WebRTC-style low-latency transmission (20-100x smaller than raw pixels)
+        private let videoCodec = VideoCodecService.shared
+        private var isEncoderSetup = false
+        private var frameNumber: Int64 = 0
+
         func startFrameStreaming() {
-            frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
+            // Setup H.264 hardware encoder for WebRTC-style transmission
+            setupH264Encoder()
+
+            frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
                 self?.captureAndSendFrame()
             }
 
-            // Start motion updates for device orientation
-            if motionManager.isDeviceMotionAvailable {
-                motionManager.deviceMotionUpdateInterval = 1.0 / 60.0  // 60Hz
-                motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical)
-                print("[AR] Motion manager started for orientation tracking")
+            // Enable device orientation notifications
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            print("[AR] Device orientation tracking started")
+        }
+
+        private func setupH264Encoder() {
+            guard !isEncoderSetup else { return }
+
+            // Setup H.264 encoder with 720p @ 30fps (WebRTC standard)
+            let success = videoCodec.setupEncoder(width: 720, height: 1280)
+
+            if success {
+                isEncoderSetup = true
+                print("[AR] ✅ H.264 hardware encoder setup (720p @ 30fps)")
+
+                // Setup callback for encoded frames
+                videoCodec.onEncodedFrame = { [weak self] h264Data, presentationTime in
+                    self?.sendH264Frame(h264Data)
+                }
+            } else {
+                print("[AR] ❌ Failed to setup H.264 encoder, falling back to pixel buffer transmission")
             }
         }
 
@@ -124,44 +146,42 @@ struct ARCameraView: UIViewRepresentable {
         private func processAndSendFrame(_ frame: ARFrame) {
             let pixelBuffer = frame.capturedImage
 
-            // Capture current device orientation from motion manager
-            if let deviceMotion = motionManager.deviceMotion {
-                let attitude = deviceMotion.attitude
-                currentOrientation = DeviceOrientation(
-                    roll: attitude.roll,
-                    pitch: attitude.pitch,
-                    yaw: attitude.yaw
-                )
+            if isEncoderSetup {
+                // WebRTC-STYLE: H.264 hardware encoding (20-100x smaller than raw pixels)
+                // - 1.3MB raw pixel data → 10-50KB H.264 compressed
+                // - Hardware accelerated (GPU) - near zero CPU overhead
+                // - Dramatically lower latency due to smaller data size
+                // - Industry standard for real-time video (WebRTC, Zoom, etc.)
+
+                let presentationTime = CMTime(seconds: Double(frameNumber) / 30.0, preferredTimescale: 600)
+                videoCodec.encode(pixelBuffer: pixelBuffer, presentationTime: presentationTime)
+                frameNumber += 1
+            } else {
+                // Fallback: Send pixel buffer directly (only if H.264 encoder failed)
+                Task { @MainActor in
+                    MultipeerService.shared.sendPixelBuffer(pixelBuffer)
+                }
             }
 
-            // Create CIImage from pixel buffer
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            // Store thumbnail for freeze functionality (async, low priority)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self = self else { return }
 
-            // Get device orientation to determine correct rotation
-            // ARKit camera always captures in native sensor orientation
-            // For landscape right: rotate 90° counter-clockwise
-            let rotatedImage = ciImage.oriented(.right)
+                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                let context = CIContext(options: [.useSoftwareRenderer: false])
+                guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
 
-            let context = CIContext(options: [.useSoftwareRenderer: false])
-            guard let cgImage = context.createCGImage(rotatedImage, from: rotatedImage.extent) else { return }
-
-            // Create UIImage
-            let uiImage = UIImage(cgImage: cgImage)
-
-            // Resize to landscape dimensions (16:9)
-            let targetSize = CGSize(width: 854, height: 480)
-            UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
-            uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
-            let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
-            UIGraphicsEndImageContext()
-
-            if let image = resizedImage {
-                // Store last frame for freeze functionality
-                lastCapturedFrame = image
+                let thumbnailImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
 
                 Task { @MainActor in
-                    MultipeerService.shared.sendVideoFrame(image, orientation: self.currentOrientation)
+                    self.lastCapturedFrame = thumbnailImage
                 }
+            }
+        }
+
+        private func sendH264Frame(_ h264Data: Data) {
+            Task { @MainActor in
+                MultipeerService.shared.sendH264Data(h264Data)
             }
         }
 
@@ -275,21 +295,52 @@ struct ARCameraView: UIViewRepresentable {
             arView.scene.addAnchor(anchor)
             annotationAnchors[annotation.id] = anchor
             annotationManager?.setWorldPosition(for: annotation.id, position: worldPosition)
+
+            // Send annotation update back to iPad with AR world position
+            Task { @MainActor in
+                // Create updated annotation with world position
+                var updatedAnnotation = Annotation(
+                    id: annotation.id,
+                    type: annotation.type,
+                    points: annotation.points,
+                    color: annotation.color,
+                    strokeWidth: annotation.strokeWidth,
+                    text: annotation.text,
+                    animationType: annotation.animationType,
+                    isComplete: true,  // AR-tracked annotations are complete
+                    worldPosition: worldPosition
+                )
+
+                // Send back to iPad so it has the AR coordinates
+                MultipeerService.shared.sendAnnotationUpdate(updatedAnnotation)
+                print("[AR] ✅ Sent annotation update to iPad with world position: \(worldPosition)")
+            }
         }
 
         private func createMarkerEntity(color: UIColor) -> Entity {
-            // Create a visible 3D marker
-            let sphere = MeshResource.generateSphere(radius: 0.02)
-            let material = SimpleMaterial(color: color, isMetallic: false)
-            let entity = ModelEntity(mesh: sphere, materials: [material])
+            // Create a 3D marker with enhanced visual effects
+            let containerEntity = Entity()
 
-            // Add outer glow
-            let outerSphere = MeshResource.generateSphere(radius: 0.035)
-            let outerMaterial = SimpleMaterial(color: color.withAlphaComponent(0.3), isMetallic: false)
+            // Inner sphere - solid core with metallic finish
+            let innerSphere = MeshResource.generateSphere(radius: 0.015)
+            var innerMaterial = SimpleMaterial(color: color, isMetallic: true)
+            innerMaterial.roughness = 0.2
+            let innerEntity = ModelEntity(mesh: innerSphere, materials: [innerMaterial])
+            containerEntity.addChild(innerEntity)
+
+            // Middle ring - translucent layer
+            let middleSphere = MeshResource.generateSphere(radius: 0.025)
+            let middleMaterial = SimpleMaterial(color: color.withAlphaComponent(0.5), isMetallic: false)
+            let middleEntity = ModelEntity(mesh: middleSphere, materials: [middleMaterial])
+            containerEntity.addChild(middleEntity)
+
+            // Outer glow - large transparent sphere
+            let outerSphere = MeshResource.generateSphere(radius: 0.04)
+            let outerMaterial = SimpleMaterial(color: color.withAlphaComponent(0.2), isMetallic: false)
             let outerEntity = ModelEntity(mesh: outerSphere, materials: [outerMaterial])
-            entity.addChild(outerEntity)
+            containerEntity.addChild(outerEntity)
 
-            return entity
+            return containerEntity
         }
 
         // MARK: - ARSessionDelegate
@@ -339,6 +390,15 @@ struct ARCameraView: UIViewRepresentable {
                     let normalized = AnnotationPoint.normalized(from: screenPoint, in: bounds.size)
                     manager.updateScreenPosition(for: id, point: normalized)
                     manager.setVisibility(for: id, visible: isOnScreen)
+
+                    // Send position update to iPad for AR tracking
+                    Task { @MainActor in
+                        MultipeerService.shared.sendAnnotationPositionUpdate(
+                            id: id,
+                            normalizedX: normalized.x,
+                            normalizedY: normalized.y
+                        )
+                    }
                 } else {
                     manager.setVisibility(for: id, visible: false)
                 }
@@ -360,7 +420,7 @@ struct ARCameraView: UIViewRepresentable {
         func cleanup() {
             frameTimer?.invalidate()
             frameTimer = nil
-            motionManager.stopDeviceMotionUpdates()
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
             arView?.session.pause()
         }
 
@@ -464,24 +524,47 @@ struct ARAnnotationMarker: View {
 
     var body: some View {
         ZStack {
+            // Outer glow
+            Circle()
+                .fill(annotation.swiftUIColor.opacity(0.2))
+                .frame(width: 70, height: 70)
+                .blur(radius: 10)
+
             // Pulsing ring
             Circle()
-                .stroke(annotation.swiftUIColor, lineWidth: 3)
+                .stroke(annotation.swiftUIColor.opacity(0.8), lineWidth: 3)
                 .frame(width: 50, height: 50)
                 .scaleEffect(isAnimating ? 1.8 : 1.0)
                 .opacity(isAnimating ? 0 : 0.7)
 
-            // Middle ring
+            // Middle ring with gradient
             Circle()
-                .stroke(annotation.swiftUIColor, lineWidth: 2)
-                .frame(width: 30, height: 30)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [annotation.swiftUIColor, annotation.swiftUIColor.opacity(0.6)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 3
+                )
+                .frame(width: 35, height: 35)
+                .shadow(color: annotation.swiftUIColor.opacity(0.6), radius: 8, x: 0, y: 4)
 
-            // Center dot
+            // Center dot with radial gradient for 3D depth
             Circle()
-                .fill(annotation.swiftUIColor)
-                .frame(width: 16, height: 16)
+                .fill(
+                    RadialGradient(
+                        colors: [annotation.swiftUIColor.opacity(0.8), annotation.swiftUIColor],
+                        center: .topLeading,
+                        startRadius: 2,
+                        endRadius: 12
+                    )
+                )
+                .frame(width: 20, height: 20)
+                .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 2)
         }
         .position(position)
+        .shadow(color: annotation.swiftUIColor.opacity(0.7), radius: 15, x: 0, y: 7)
         .onAppear {
             withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: false)) {
                 isAnimating = true

@@ -199,7 +199,6 @@ class CameraPreviewUIView: UIView {
 /// View to display received video frames from remote peer
 struct RemoteVideoView: View {
     @ObservedObject var multipeerService = MultipeerService.shared
-    var videoAspectRatio: CGFloat = 16.0 / 9.0  // Landscape video
 
     var body: some View {
         GeometryReader { geometry in
@@ -208,19 +207,11 @@ struct RemoteVideoView: View {
 
                 // Show frozen frame if available, otherwise show live frame
                 if let frame = multipeerService.frozenFrame ?? multipeerService.receivedVideoFrame {
-                    // Calculate the frame size to fit while maintaining aspect ratio
-                    let videoFrame = calculateVideoFrame(containerSize: geometry.size, aspectRatio: videoAspectRatio)
-
-                    // Calculate rotation angle from device orientation
-                    let rotationAngle = calculateRotationAngle(from: multipeerService.receivedDeviceOrientation)
-
                     Image(uiImage: frame)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: videoFrame.width, height: videoFrame.height)
-                        .rotationEffect(rotationAngle)
-                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                        .animation(.easeInOut(duration: 0.1), value: rotationAngle)
+                        .aspectRatio(contentMode: contentMode)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -236,20 +227,10 @@ struct RemoteVideoView: View {
         }
     }
 
-    /// Calculate rotation angle from device orientation (roll, pitch, yaw)
-    /// This ensures the video on iPad matches the physical orientation of the iPhone
-    private func calculateRotationAngle(from orientation: DeviceOrientation) -> Angle {
-        // Use roll (rotation around longitudinal axis) to determine screen rotation
-        // Roll is in radians, convert to degrees
-        let rollDegrees = orientation.roll * 180.0 / .pi
-
-        // Normalize to -180 to 180 range
-        var normalizedRoll = rollDegrees.truncatingRemainder(dividingBy: 360.0)
-        if normalizedRoll > 180 { normalizedRoll -= 360 }
-        if normalizedRoll < -180 { normalizedRoll += 360 }
-
-        // Return as SwiftUI Angle
-        return Angle(degrees: -normalizedRoll)  // Negative because we want to counter-rotate
+    /// Always use .fit to show full frame without zooming
+    /// This ensures no content is cropped regardless of orientation
+    private var contentMode: ContentMode {
+        return .fit  // Always fit to show complete frame
     }
 
     private func calculateVideoFrame(containerSize: CGSize, aspectRatio: CGFloat) -> CGSize {

@@ -1,0 +1,591 @@
+import Foundation
+import AVFoundation
+import VideoToolbox
+import CoreMedia
+
+/// Hardware-accelerated H.264 video encoding and decoding service
+/// Based on WebRTC and Zoho Lens best practices
+/// Thread-safe: Uses dedicated encoding/decoding queues
+class VideoCodecService: NSObject {
+    static let shared = VideoCodecService()
+
+    // MARK: - Encoder Properties
+    private var encodingSession: VTCompressionSession?
+    private let encodingQueue = DispatchQueue(label: "com.novaid.videoEncoding", qos: .userInitiated)
+
+    // MARK: - Decoder Properties
+    private var decodingSession: VTDecompressionSession?
+    private let decodingQueue = DispatchQueue(label: "com.novaid.videoDecoding", qos: .userInitiated)
+    private var formatDescription: CMFormatDescription?
+    private var frameCounter: Int64 = 0
+
+    // MARK: - Configuration
+    // Industry standard: 720p at 30fps for remote assistance
+    private let targetWidth: Int32 = 720
+    private let targetHeight: Int32 = 1280
+    private let targetFrameRate: Int32 = 30
+
+    // Adaptive bitrate: Start at 2.5 Mbps, adjust based on network
+    private var currentBitrate: Int = 2_500_000 // 2.5 Mbps
+    private let minBitrate: Int = 500_000       // 500 Kbps
+    private let maxBitrate: Int = 4_000_000     // 4 Mbps
+
+    // Network monitoring
+    private var packetsLost: Int = 0
+    private var packetsSent: Int = 0
+    private var lastBitrateAdjustment: Date = Date()
+
+    // Callbacks
+    var onEncodedFrame: ((Data, CMTime) -> Void)?
+    var onDecodedFrame: ((CVPixelBuffer) -> Void)?
+
+    private override init() {
+        super.init()
+    }
+
+    // MARK: - Encoder Setup
+
+    /// Initialize H.264 hardware encoder
+    func setupEncoder(width: Int32, height: Int32) -> Bool {
+        print("[VideoCodec] Setting up H.264 hardware encoder: \(width)x\(height) @ \(targetFrameRate)fps")
+
+        // Clean up existing session
+        if let session = encodingSession {
+            VTCompressionSessionInvalidate(session)
+            encodingSession = nil
+        }
+
+        // Create compression session
+        var session: VTCompressionSession?
+        let status = VTCompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            width: width,
+            height: height,
+            codecType: kCMVideoCodecType_H264,
+            encoderSpecification: nil,
+            imageBufferAttributes: nil,
+            compressedDataAllocator: nil,
+            outputCallback: encodingOutputCallback,
+            refcon: Unmanaged.passUnretained(self).toOpaque(),
+            compressionSessionOut: &session
+        )
+
+        guard status == noErr, let session = session else {
+            print("[VideoCodec] ❌ Failed to create compression session: \(status)")
+            return false
+        }
+
+        // Configure encoder properties
+        configureEncoder(session: session)
+
+        // Prepare to encode
+        VTCompressionSessionPrepareToEncodeFrames(session)
+
+        encodingSession = session
+        print("[VideoCodec] ✅ H.264 hardware encoder ready")
+        return true
+    }
+
+    private func configureEncoder(session: VTCompressionSession) {
+        // Real-time encoding for low latency
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_RealTime,
+            value: kCFBooleanTrue
+        )
+
+        // Profile level (Baseline for compatibility, Main for quality)
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_ProfileLevel,
+            value: kVTProfileLevel_H264_Main_AutoLevel
+        )
+
+        // Target bitrate
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_AverageBitRate,
+            value: currentBitrate as CFNumber
+        )
+
+        // Data rate limits (for adaptive bitrate)
+        let dataRateLimits = [
+            currentBitrate / 8,  // bytes per second
+            1                     // per second
+        ] as CFArray
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_DataRateLimits,
+            value: dataRateLimits
+        )
+
+        // Frame rate
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_ExpectedFrameRate,
+            value: targetFrameRate as CFNumber
+        )
+
+        // Max key frame interval (every 2 seconds for quick recovery)
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
+            value: (targetFrameRate * 2) as CFNumber
+        )
+
+        // Allow frame reordering for better compression
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_AllowFrameReordering,
+            value: kCFBooleanFalse // Disable for lower latency
+        )
+
+        // Hardware acceleration
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+            value: kCFBooleanTrue
+        )
+
+        print("[VideoCodec] Encoder configured: \(currentBitrate / 1_000_000) Mbps")
+    }
+
+    // MARK: - Encoding
+
+    /// Encode a pixel buffer to H.264
+    func encode(pixelBuffer: CVPixelBuffer, presentationTime: CMTime) {
+        guard let session = encodingSession else {
+            print("[VideoCodec] ⚠️ No encoding session")
+            return
+        }
+
+        encodingQueue.async {
+            let status = VTCompressionSessionEncodeFrame(
+                session,
+                imageBuffer: pixelBuffer,
+                presentationTimeStamp: presentationTime,
+                duration: .invalid,
+                frameProperties: nil,
+                sourceFrameRefcon: nil,
+                infoFlagsOut: nil
+            )
+
+            if status != noErr {
+                print("[VideoCodec] ❌ Encoding failed: \(status)")
+            }
+        }
+    }
+
+    // Encoding callback
+    private let encodingOutputCallback: VTCompressionOutputCallback = {
+        (outputCallbackRefCon, sourceFrameRefCon, status, infoFlags, sampleBuffer) in
+
+        guard status == noErr else {
+            print("[VideoCodec] ❌ Encoding callback error: \(status)")
+            return
+        }
+
+        guard let sampleBuffer = sampleBuffer else {
+            print("[VideoCodec] ⚠️ No sample buffer")
+            return
+        }
+
+        // Get the service instance
+        let service = Unmanaged<VideoCodecService>.fromOpaque(outputCallbackRefCon!).takeUnretainedValue()
+
+        // Extract encoded data
+        guard CMSampleBufferDataIsReady(sampleBuffer) else {
+            print("[VideoCodec] ⚠️ Sample buffer not ready")
+            return
+        }
+
+        // Get data buffer
+        guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+            print("[VideoCodec] ⚠️ No data buffer")
+            return
+        }
+
+        // Copy data
+        var length: Int = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        let copyStatus = CMBlockBufferGetDataPointer(
+            dataBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &length,
+            dataPointerOut: &dataPointer
+        )
+
+        guard copyStatus == noErr, let dataPointer = dataPointer else {
+            print("[VideoCodec] ❌ Failed to get data pointer")
+            return
+        }
+
+        // Create Data object
+        let data = Data(bytes: dataPointer, count: length)
+
+        // Get presentation time
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+
+        // Call callback on main thread
+        Task { @MainActor in
+            service.onEncodedFrame?(data, presentationTime)
+        }
+    }
+
+    // MARK: - Adaptive Bitrate
+
+    /// Report packet loss for adaptive bitrate
+    func reportPacketLoss(lost: Int, sent: Int) {
+        packetsLost += lost
+        packetsSent += sent
+
+        // Adjust bitrate every 2 seconds
+        let now = Date()
+        guard now.timeIntervalSince(lastBitrateAdjustment) >= 2.0 else { return }
+        lastBitrateAdjustment = now
+
+        let lossRate = packetsSent > 0 ? Double(packetsLost) / Double(packetsSent) : 0.0
+        adjustBitrate(lossRate: lossRate)
+
+        // Reset counters
+        packetsLost = 0
+        packetsSent = 0
+    }
+
+    private func adjustBitrate(lossRate: Double) {
+        let oldBitrate = currentBitrate
+
+        if lossRate > 0.15 {
+            // High packet loss (>15%) - decrease significantly
+            currentBitrate = max(minBitrate, Int(Double(currentBitrate) * 0.7))
+            print("[VideoCodec] 📉 High packet loss (\(Int(lossRate * 100))%) - decreasing bitrate")
+        } else if lossRate > 0.05 {
+            // Moderate packet loss (5-15%) - decrease moderately
+            currentBitrate = max(minBitrate, Int(Double(currentBitrate) * 0.85))
+            print("[VideoCodec] 📉 Moderate packet loss (\(Int(lossRate * 100))%) - decreasing bitrate")
+        } else if lossRate < 0.02 {
+            // Low packet loss (<2%) - increase gradually
+            currentBitrate = min(maxBitrate, Int(Double(currentBitrate) * 1.1))
+            print("[VideoCodec] 📈 Low packet loss (\(Int(lossRate * 100))%) - increasing bitrate")
+        }
+
+        if currentBitrate != oldBitrate {
+            updateEncoderBitrate()
+        }
+    }
+
+    private func updateEncoderBitrate() {
+        guard let session = encodingSession else { return }
+
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_AverageBitRate,
+            value: currentBitrate as CFNumber
+        )
+
+        let dataRateLimits = [
+            currentBitrate / 8,
+            1
+        ] as CFArray
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_DataRateLimits,
+            value: dataRateLimits
+        )
+
+        print("[VideoCodec] Updated bitrate: \(currentBitrate / 1_000_000) Mbps")
+    }
+
+    // MARK: - Decoder Setup
+
+    /// Initialize H.264 hardware decoder with format description
+    func setupDecoder(formatDescription: CMFormatDescription) -> Bool {
+        let dimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
+        print("[VideoCodec] Setting up H.264 hardware decoder: \(dimensions.width)x\(dimensions.height)")
+
+        // Clean up existing session
+        if let session = decodingSession {
+            VTDecompressionSessionInvalidate(session)
+            decodingSession = nil
+        }
+
+        // Store format description
+        self.formatDescription = formatDescription
+
+        // Destination image buffer attributes
+        let imageBufferAttributes: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelBufferWidthKey: dimensions.width,
+            kCVPixelBufferHeightKey: dimensions.height,
+            kCVPixelBufferIOSurfacePropertiesKey: [:],
+            kCVPixelBufferMetalCompatibilityKey: true
+        ]
+
+        // Output callback
+        var outputCallback = VTDecompressionOutputCallbackRecord(
+            decompressionOutputCallback: decodingOutputCallback,
+            decompressionOutputRefCon: Unmanaged.passUnretained(self).toOpaque()
+        )
+
+        // Create decompression session
+        var session: VTDecompressionSession?
+        let createStatus = VTDecompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            formatDescription: formatDescription,
+            decoderSpecification: nil,
+            imageBufferAttributes: imageBufferAttributes as CFDictionary,
+            outputCallback: &outputCallback,
+            decompressionSessionOut: &session
+        )
+
+        guard createStatus == noErr, let session = session else {
+            print("[VideoCodec] ❌ Failed to create decompression session: \(createStatus)")
+            return false
+        }
+
+        // Configure decoder for real-time playback
+        VTSessionSetProperty(
+            session,
+            key: kVTDecompressionPropertyKey_RealTime,
+            value: kCFBooleanTrue
+        )
+
+        decodingSession = session
+        print("[VideoCodec] ✅ H.264 hardware decoder ready")
+        return true
+    }
+
+    /// Create format description from SPS/PPS parameter sets
+    /// This is needed on the first frame or when stream parameters change
+    private func createFormatDescription(from h264Data: Data) -> CMFormatDescription? {
+        // Parse NAL units to find SPS and PPS
+        var spsData: Data?
+        var ppsData: Data?
+
+        var offset = 0
+        while offset < h264Data.count - 4 {
+            // Look for start code (0x00 0x00 0x00 0x01)
+            if h264Data[offset] == 0x00 &&
+               h264Data[offset + 1] == 0x00 &&
+               h264Data[offset + 2] == 0x00 &&
+               h264Data[offset + 3] == 0x01 {
+
+                let nalType = h264Data[offset + 4] & 0x1F
+
+                // Find next start code or end of data
+                var nalEndOffset = offset + 4
+                while nalEndOffset < h264Data.count - 4 {
+                    if h264Data[nalEndOffset] == 0x00 &&
+                       h264Data[nalEndOffset + 1] == 0x00 &&
+                       h264Data[nalEndOffset + 2] == 0x00 &&
+                       h264Data[nalEndOffset + 3] == 0x01 {
+                        break
+                    }
+                    nalEndOffset += 1
+                }
+
+                if nalEndOffset == h264Data.count - 4 {
+                    nalEndOffset = h264Data.count
+                }
+
+                // Extract NAL unit data (without start code)
+                let nalData = h264Data.subdata(in: (offset + 4)..<nalEndOffset)
+
+                if nalType == 7 { // SPS
+                    spsData = nalData
+                    print("[VideoCodec] Found SPS (\(nalData.count) bytes)")
+                } else if nalType == 8 { // PPS
+                    ppsData = nalData
+                    print("[VideoCodec] Found PPS (\(nalData.count) bytes)")
+                }
+
+                offset = nalEndOffset
+            } else {
+                offset += 1
+            }
+        }
+
+        // Create format description if we have both SPS and PPS
+        guard let spsData = spsData, let ppsData = ppsData else {
+            return nil
+        }
+
+        let parameterSets = [spsData, ppsData]
+        let parameterSetSizes = parameterSets.map { $0.count }
+
+        var formatDescription: CMFormatDescription?
+
+        // Create parameter set pointers with proper type casting
+        let status = parameterSets.withUnsafeBufferPointer { parameterSetsBuffer in
+            var parameterSetPointers = parameterSets.map { data in
+                data.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt8.self) }
+            }
+
+            return parameterSetPointers.withUnsafeMutableBufferPointer { pointers in
+                CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: 2,
+                    parameterSetPointers: pointers.baseAddress!,
+                    parameterSetSizes: parameterSetSizes,
+                    nalUnitHeaderLength: 4,
+                    formatDescriptionOut: &formatDescription
+                )
+            }
+        }
+
+        if status == noErr {
+            print("[VideoCodec] ✅ Created format description from SPS/PPS")
+            return formatDescription
+        } else {
+            print("[VideoCodec] ❌ Failed to create format description: \(status)")
+            return nil
+        }
+    }
+
+    // MARK: - Decoding
+
+    /// Decode H.264 data to pixel buffer
+    func decode(data: Data) {
+        decodingQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            // If we don't have a decoder session, try to create format description from this data
+            if self.decodingSession == nil {
+                if let formatDesc = self.createFormatDescription(from: data) {
+                    _ = self.setupDecoder(formatDescription: formatDesc)
+                } else {
+                    // No SPS/PPS found yet, skip this frame
+                    return
+                }
+            }
+
+            guard let session = self.decodingSession,
+                  let formatDescription = self.formatDescription else {
+                print("[VideoCodec] ⚠️ No decoding session or format description")
+                return
+            }
+
+            // Create block buffer from data
+            var blockBuffer: CMBlockBuffer?
+            let createStatus = CMBlockBufferCreateWithMemoryBlock(
+                allocator: kCFAllocatorDefault,
+                memoryBlock: nil,
+                blockLength: data.count,
+                blockAllocator: kCFAllocatorDefault,
+                customBlockSource: nil,
+                offsetToData: 0,
+                dataLength: data.count,
+                flags: 0,
+                blockBufferOut: &blockBuffer
+            )
+
+            guard createStatus == noErr, let blockBuffer = blockBuffer else {
+                print("[VideoCodec] ❌ Failed to create block buffer: \(createStatus)")
+                return
+            }
+
+            // Copy data into block buffer
+            data.withUnsafeBytes { bytes in
+                guard let baseAddress = bytes.baseAddress else { return }
+                CMBlockBufferReplaceDataBytes(
+                    with: baseAddress,
+                    blockBuffer: blockBuffer,
+                    offsetIntoDestination: 0,
+                    dataLength: data.count
+                )
+            }
+
+            // Create sample buffer
+            var sampleBuffer: CMSampleBuffer?
+
+            // Create timing info
+            let presentationTime = CMTime(value: self.frameCounter, timescale: 30)
+            var timingInfo = CMSampleTimingInfo(
+                duration: CMTime(value: 1, timescale: 30),
+                presentationTimeStamp: presentationTime,
+                decodeTimeStamp: .invalid
+            )
+
+            // Create sample buffer
+            let sampleStatus = CMSampleBufferCreateReady(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: blockBuffer,
+                formatDescription: formatDescription,
+                sampleCount: 1,
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timingInfo,
+                sampleSizeEntryCount: 0,
+                sampleSizeArray: nil,
+                sampleBufferOut: &sampleBuffer
+            )
+
+            guard sampleStatus == noErr, let sampleBuffer = sampleBuffer else {
+                print("[VideoCodec] ❌ Failed to create sample buffer: \(sampleStatus)")
+                return
+            }
+
+            // Set attachments for real-time decoding
+            let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true)
+            if let attachmentsArray = attachments as? [[CFString: Any]] {
+                var dict = attachmentsArray[0]
+                dict[kCMSampleAttachmentKey_DisplayImmediately] = kCFBooleanTrue
+            }
+
+            // Decode the frame
+            var flagsOut: VTDecodeInfoFlags = []
+            let decodeStatus = VTDecompressionSessionDecodeFrame(
+                session,
+                sampleBuffer: sampleBuffer,
+                flags: [._EnableAsynchronousDecompression],
+                frameRefcon: nil,
+                infoFlagsOut: &flagsOut
+            )
+
+            if decodeStatus != noErr {
+                print("[VideoCodec] ❌ Decoding failed: \(decodeStatus)")
+            }
+
+            self.frameCounter += 1
+        }
+    }
+
+    // Decoding callback
+    private let decodingOutputCallback: VTDecompressionOutputCallback = {
+        (decompressionOutputRefCon, sourceFrameRefCon, status, infoFlags, imageBuffer, presentationTimeStamp, presentationDuration) in
+
+        guard status == noErr else {
+            print("[VideoCodec] ❌ Decoding callback error: \(status)")
+            return
+        }
+
+        guard let imageBuffer = imageBuffer else {
+            print("[VideoCodec] ⚠️ No image buffer")
+            return
+        }
+
+        // Get the service instance
+        let service = Unmanaged<VideoCodecService>.fromOpaque(decompressionOutputRefCon!).takeUnretainedValue()
+
+        // Call callback on main thread
+        Task { @MainActor in
+            service.onDecodedFrame?(imageBuffer)
+        }
+    }
+
+    // MARK: - Cleanup
+
+    func cleanup() {
+        if let session = encodingSession {
+            VTCompressionSessionInvalidate(session)
+            encodingSession = nil
+        }
+
+        if let session = decodingSession {
+            VTDecompressionSessionInvalidate(session)
+            decodingSession = nil
+        }
+
+        print("[VideoCodec] Cleaned up encoder and decoder")
+    }
+}

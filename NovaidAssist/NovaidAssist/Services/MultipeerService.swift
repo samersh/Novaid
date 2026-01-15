@@ -2,6 +2,7 @@ import Foundation
 import MultipeerConnectivity
 import Combine
 import UIKit
+import CoreVideo
 
 /// Service for peer-to-peer connection using MultipeerConnectivity
 /// Allows iPhone and iPad to connect directly via WiFi/Bluetooth without a server
@@ -31,10 +32,17 @@ class MultipeerService: NSObject, ObservableObject {
     var onCallAccepted: (() -> Void)?
     var onCallRejected: (() -> Void)?
     var onAnnotationReceived: ((Annotation) -> Void)?
+    var onAnnotationUpdated: ((Annotation) -> Void)?
+    var onAnnotationPositionUpdated: ((String, CGFloat, CGFloat) -> Void)?
+    var onClearAnnotations: (() -> Void)?
+    var onToggleFlashlight: ((Bool) -> Void)?
     var onVideoFrozen: (() -> Void)?
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
+    var onPixelBufferReceived: ((CVPixelBuffer) -> Void)?  // New: for direct pixel buffer transmission
+    var onH264DataReceived: ((Data) -> Void)?  // H.264 compressed frames (WebRTC-style, 20-100x smaller)
     var onFrozenFrameReceived: ((UIImage) -> Void)?
+    var onAudioDataReceived: ((Data) -> Void)?
 
     // MARK: - Private Properties
     private var peerID: MCPeerID!
@@ -42,7 +50,22 @@ class MultipeerService: NSObject, ObservableObject {
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     private var lastFrameTime: Date = Date()
-    private let minFrameInterval: TimeInterval = 1.0 / 15.0 // 15 FPS max
+    private let minFrameInterval: TimeInterval = 1.0 / 30.0 // 30 FPS max for smoother video
+
+    // Adaptive quality settings based on WebRTC best practices
+    private var currentCompressionQuality: CGFloat = 0.5 // Start at 0.5 for better quality
+    private let minCompressionQuality: CGFloat = 0.3
+    private let maxCompressionQuality: CGFloat = 0.7
+    private var framesSent: Int = 0
+    private var framesFailed: Int = 0
+    private var lastQualityAdjustment: Date = Date()
+
+    // Network monitoring statistics
+    private var totalFramesSent: Int = 0
+    private var totalFramesFailed: Int = 0
+    private var totalBytesSent: Int64 = 0
+    private var sessionStartTime: Date?
+    private var lastStatsLog: Date = Date()
 
     private let serviceType = "novaid-assist"
 
@@ -158,7 +181,70 @@ class MultipeerService: NSObject, ObservableObject {
         sendData(data)
     }
 
-    /// Send video frame with orientation (compressed JPEG)
+    /// Send H.264 compressed frame (WebRTC-style, 20-100x smaller than raw pixels)
+    /// This is the FASTEST method - industry standard for real-time video
+    func sendH264Data(_ h264Data: Data) {
+        // Rate limit to prevent flooding
+        let now = Date()
+        guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
+        lastFrameTime = now
+
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+
+        // Send unreliable for speed (UDP-style - WebRTC approach)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            framesSent += 1
+            totalFramesSent += 1
+            totalBytesSent += Int64(data.count)
+            adjustQualityIfNeeded()
+            logNetworkStatsIfNeeded()
+        } catch {
+            framesFailed += 1
+            totalFramesFailed += 1
+            adjustQualityIfNeeded()
+        }
+    }
+
+    /// Send CVPixelBuffer directly (zero JPEG conversion, proper color handling)
+    /// DEPRECATED: Use H.264 for much better performance (20-100x smaller data)
+    func sendPixelBuffer(_ pixelBuffer: CVPixelBuffer) {
+        // Rate limit to prevent flooding
+        let now = Date()
+        guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
+        lastFrameTime = now
+
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        // Encode pixel buffer to data (preserves YUV format, no color conversion)
+        guard let pixelData = PixelBufferTransmissionService.encodePixelBuffer(pixelBuffer) else {
+            print("[Multipeer] ❌ Failed to encode pixel buffer")
+            return
+        }
+
+        let message = MultipeerMessage(type: .pixelBufferFrame, payload: pixelData)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+
+        // Send unreliable for speed (like UDP)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            framesSent += 1
+            totalFramesSent += 1
+            totalBytesSent += Int64(data.count)
+            adjustQualityIfNeeded()
+            logNetworkStatsIfNeeded()
+        } catch {
+            framesFailed += 1
+            totalFramesFailed += 1
+            adjustQualityIfNeeded()
+        }
+    }
+
+    /// Send video frame with orientation (compressed JPEG with adaptive quality)
+    /// DEPRECATED: Use sendPixelBuffer() for better performance and color accuracy
     func sendVideoFrame(_ image: UIImage, orientation: DeviceOrientation = DeviceOrientation()) {
         // Rate limit to prevent flooding
         let now = Date()
@@ -167,8 +253,8 @@ class MultipeerService: NSObject, ObservableObject {
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Compress to JPEG with lower quality for speed
-        guard let jpegData = image.jpegData(compressionQuality: 0.3) else { return }
+        // Adaptive quality based on network performance (WebRTC-inspired)
+        guard let jpegData = image.jpegData(compressionQuality: currentCompressionQuality) else { return }
 
         // Create video frame with orientation message
         let frameData = VideoFrameData(imageData: jpegData, orientation: orientation)
@@ -180,17 +266,88 @@ class MultipeerService: NSObject, ObservableObject {
         // Send unreliable for speed (like UDP)
         do {
             try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            framesSent += 1
+            totalFramesSent += 1
+            totalBytesSent += Int64(data.count)
+            adjustQualityIfNeeded()
+            logNetworkStatsIfNeeded()
         } catch {
-            // Silently fail for video frames
+            framesFailed += 1
+            totalFramesFailed += 1
+            adjustQualityIfNeeded()
         }
+    }
+
+    /// Adjust compression quality based on network performance (WebRTC-inspired adaptive quality)
+    private func adjustQualityIfNeeded() {
+        // Adjust every 2 seconds (similar to WebRTC bitrate adjustment)
+        let now = Date()
+        guard now.timeIntervalSince(lastQualityAdjustment) >= 2.0 else { return }
+        lastQualityAdjustment = now
+
+        guard framesSent > 0 else { return }
+
+        let failureRate = Double(framesFailed) / Double(framesSent + framesFailed)
+        let oldQuality = currentCompressionQuality
+
+        if failureRate > 0.1 {
+            // High failure rate (>10%) - reduce quality for smaller frames
+            currentCompressionQuality = max(minCompressionQuality, currentCompressionQuality - 0.05)
+            print("[Multipeer] 📉 High failure rate (\(Int(failureRate * 100))%) - reducing quality to \(String(format: "%.2f", currentCompressionQuality))")
+        } else if failureRate < 0.02 && currentCompressionQuality < maxCompressionQuality {
+            // Low failure rate (<2%) - increase quality gradually
+            currentCompressionQuality = min(maxCompressionQuality, currentCompressionQuality + 0.03)
+            print("[Multipeer] 📈 Low failure rate (\(Int(failureRate * 100))%) - increasing quality to \(String(format: "%.2f", currentCompressionQuality))")
+        }
+
+        // Reset counters
+        framesSent = 0
+        framesFailed = 0
+    }
+
+    /// Log network statistics periodically for monitoring
+    private func logNetworkStatsIfNeeded() {
+        let now = Date()
+        guard now.timeIntervalSince(lastStatsLog) >= 10.0 else { return }
+        lastStatsLog = now
+
+        let totalFrames = totalFramesSent + totalFramesFailed
+        guard totalFrames > 0 else { return }
+
+        let successRate = Double(totalFramesSent) / Double(totalFrames) * 100
+        let avgBytesPerFrame = totalFramesSent > 0 ? totalBytesSent / Int64(totalFramesSent) : 0
+        let mbTransferred = Double(totalBytesSent) / 1_000_000.0
+
+        if let startTime = sessionStartTime {
+            let duration = now.timeIntervalSince(startTime)
+            let fps = Double(totalFramesSent) / duration
+            let mbps = (Double(totalBytesSent) * 8.0) / (duration * 1_000_000.0)
+
+            print("[Multipeer] 📊 Network Stats: \(totalFramesSent) frames sent, \(String(format: "%.1f", successRate))% success rate, \(String(format: "%.1f", fps)) FPS, \(String(format: "%.2f", mbps)) Mbps, \(avgBytesPerFrame) bytes/frame, Quality: \(String(format: "%.2f", currentCompressionQuality))")
+        } else {
+            sessionStartTime = now
+        }
+    }
+
+    /// Reset network statistics (called on new connection)
+    private func resetNetworkStats() {
+        totalFramesSent = 0
+        totalFramesFailed = 0
+        totalBytesSent = 0
+        framesSent = 0
+        framesFailed = 0
+        sessionStartTime = Date()
+        lastStatsLog = Date()
+        currentCompressionQuality = 0.5 // Reset to default quality
+        print("[Multipeer] 📊 Network statistics reset for new session")
     }
 
     /// Send frozen frame (compressed JPEG)
     func sendFrozenFrame(_ image: UIImage) {
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // Compress to JPEG with higher quality for frozen frame
-        guard let jpegData = image.jpegData(compressionQuality: 0.7) else { return }
+        // Compress to JPEG with good quality for frozen frame (for annotation drawing)
+        guard let jpegData = image.jpegData(compressionQuality: 0.75) else { return }
 
         let message = MultipeerMessage(type: .frozenFrame, payload: jpegData)
         guard let data = try? JSONEncoder().encode(message) else { return }
@@ -200,6 +357,28 @@ class MultipeerService: NSObject, ObservableObject {
             try session.send(data, toPeers: session.connectedPeers, with: .reliable)
         } catch {
             print("[Multipeer] Failed to send frozen frame: \(error)")
+        }
+    }
+
+    /// Send audio data
+    func sendAudioData(_ audioData: Data) {
+        guard isConnected, !session.connectedPeers.isEmpty else {
+            print("[Multipeer] ⚠️ Cannot send audio - not connected")
+            return
+        }
+
+        let message = MultipeerMessage(type: .audioData, payload: audioData)
+        guard let data = try? JSONEncoder().encode(message) else {
+            print("[Multipeer] ❌ Failed to encode audio message")
+            return
+        }
+
+        // Send unreliable for low latency (like UDP)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            print("[Multipeer] ✅ Sent audio data: \(audioData.count) bytes to \(session.connectedPeers.count) peer(s)")
+        } catch {
+            print("[Multipeer] ❌ Failed to send audio: \(error.localizedDescription)")
         }
     }
 
@@ -235,6 +414,34 @@ class MultipeerService: NSObject, ObservableObject {
         sendMessage(message)
     }
 
+    /// Send annotation update with AR world position
+    func sendAnnotationUpdate(_ annotation: Annotation) {
+        guard let data = try? JSONEncoder().encode(annotation) else {
+            print("[Multipeer] ❌ Failed to encode annotation update")
+            return
+        }
+        let message = MultipeerMessage(type: .annotationUpdate, payload: data)
+        sendMessage(message)
+        print("[Multipeer] ✅ Sent annotation update with world position: \(annotation.worldPosition?.debugDescription ?? "none")")
+    }
+
+    /// Send lightweight annotation position update for AR tracking
+    func sendAnnotationPositionUpdate(id: String, normalizedX: CGFloat, normalizedY: CGFloat) {
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        let update = AnnotationPositionUpdate(id: id, normalizedX: normalizedX, normalizedY: normalizedY)
+        guard let data = try? JSONEncoder().encode(update) else { return }
+        let message = MultipeerMessage(type: .annotationPositionUpdate, payload: data)
+
+        // Send unreliable for low latency (positions update frequently)
+        do {
+            guard let messageData = try? JSONEncoder().encode(message) else { return }
+            try session.send(messageData, toPeers: session.connectedPeers, with: .unreliable)
+        } catch {
+            // Silently fail for position updates to avoid log spam
+        }
+    }
+
     /// Send freeze video command
     func sendFreezeVideo() {
         let message = MultipeerMessage(type: .freezeVideo, payload: nil)
@@ -246,6 +453,21 @@ class MultipeerService: NSObject, ObservableObject {
         guard let data = try? JSONEncoder().encode(annotations) else { return }
         let message = MultipeerMessage(type: .resumeVideo, payload: data)
         sendMessage(message)
+    }
+
+    /// Send clear all annotations command
+    func sendClearAnnotations() {
+        let message = MultipeerMessage(type: .clearAnnotations, payload: nil)
+        sendMessage(message)
+        print("[Multipeer] Sent clear annotations command")
+    }
+
+    /// Send toggle flashlight command
+    func sendToggleFlashlight(on: Bool) {
+        let payload = try? JSONEncoder().encode(on)
+        let message = MultipeerMessage(type: .toggleFlashlight, payload: payload)
+        sendMessage(message)
+        print("[Multipeer] Sent toggle flashlight command: \(on ? "ON" : "OFF")")
     }
 
     // MARK: - Cleanup
@@ -282,6 +504,7 @@ extension MultipeerService: MCSessionDelegate {
                 self.connectedPeerId = peerID.displayName
                 self.connectionStatus = "Connected to \(peerID.displayName)"
                 self.stopAll()
+                self.resetNetworkStats()
                 self.onConnected?()
 
             case .connecting:
@@ -329,6 +552,19 @@ extension MultipeerService: MCSessionDelegate {
                     self.onAnnotationReceived?(annotation)
                 }
 
+            case .annotationUpdate:
+                if let payload = message.payload,
+                   let annotation = try? JSONDecoder().decode(Annotation.self, from: payload) {
+                    print("[Multipeer] ✅ Received annotation update with world position: \(annotation.worldPosition?.debugDescription ?? "none")")
+                    self.onAnnotationUpdated?(annotation)
+                }
+
+            case .annotationPositionUpdate:
+                if let payload = message.payload,
+                   let update = try? JSONDecoder().decode(AnnotationPositionUpdate.self, from: payload) {
+                    self.onAnnotationPositionUpdated?(update.id, update.normalizedX, update.normalizedY)
+                }
+
             case .freezeVideo:
                 self.onVideoFrozen?()
 
@@ -336,6 +572,17 @@ extension MultipeerService: MCSessionDelegate {
                 if let payload = message.payload,
                    let annotations = try? JSONDecoder().decode([Annotation].self, from: payload) {
                     self.onVideoResumed?(annotations)
+                }
+
+            case .clearAnnotations:
+                print("[Multipeer] Received clear annotations command")
+                self.onClearAnnotations?()
+
+            case .toggleFlashlight:
+                if let payload = message.payload,
+                   let isOn = try? JSONDecoder().decode(Bool.self, from: payload) {
+                    print("[Multipeer] Received toggle flashlight: \(isOn ? "ON" : "OFF")")
+                    self.onToggleFlashlight?(isOn)
                 }
 
             case .videoFrame:
@@ -354,12 +601,35 @@ extension MultipeerService: MCSessionDelegate {
                     self.onVideoFrameReceived?(image)
                 }
 
+            case .h264Frame:
+                // WebRTC-STYLE: H.264 compressed frame (20-100x smaller, industry standard)
+                if let payload = message.payload {
+                    self.onH264DataReceived?(payload)
+                    // print("[Multipeer] ✅ Received H.264 frame: \(payload.count) bytes")
+                }
+
+            case .pixelBufferFrame:
+                // Fallback: Direct CVPixelBuffer transmission (no JPEG, proper YUV handling)
+                if let payload = message.payload,
+                   let pixelBuffer = PixelBufferTransmissionService.decodePixelBuffer(from: payload) {
+                    self.onPixelBufferReceived?(pixelBuffer)
+                    print("[Multipeer] ✅ Received CVPixelBuffer frame: \(CVPixelBufferGetWidth(pixelBuffer))x\(CVPixelBufferGetHeight(pixelBuffer))")
+                }
+
             case .frozenFrame:
                 if let payload = message.payload,
                    let image = UIImage(data: payload) {
                     self.frozenFrame = image
                     self.onFrozenFrameReceived?(image)
                     print("[Multipeer] Received frozen frame")
+                }
+
+            case .audioData:
+                if let payload = message.payload {
+                    print("[Multipeer] ✅ Received audio data: \(payload.count) bytes")
+                    self.onAudioDataReceived?(payload)
+                } else {
+                    print("[Multipeer] ⚠️ Received audio message with no payload")
                 }
             }
         }
@@ -453,27 +723,45 @@ struct MultipeerMessage: Codable {
         case callRejected
         case callEnded
         case annotation
+        case annotationUpdate
+        case annotationPositionUpdate
+        case clearAnnotations
+        case toggleFlashlight
         case freezeVideo
         case resumeVideo
         case videoFrame
         case videoFrameWithOrientation
+        case pixelBufferFrame  // CVPixelBuffer transmission (raw YUV ~1.3MB/frame)
+        case h264Frame  // H.264 compressed frame (10-50KB/frame - WebRTC standard)
         case frozenFrame
+        case audioData
     }
 
     let type: MessageType
     let payload: Data?
 }
 
+/// Lightweight position update for AR tracking
+struct AnnotationPositionUpdate: Codable {
+    let id: String
+    let normalizedX: CGFloat
+    let normalizedY: CGFloat
+}
+
 // MARK: - Device Orientation Data
 struct DeviceOrientation: Codable {
-    var roll: Double = 0.0    // Rotation around longitudinal axis
-    var pitch: Double = 0.0   // Rotation around lateral axis
-    var yaw: Double = 0.0     // Rotation around vertical axis
+    enum OrientationState: String, Codable {
+        case portrait
+        case portraitUpsideDown
+        case landscapeLeft
+        case landscapeRight
+        case unknown
+    }
 
-    init(roll: Double = 0.0, pitch: Double = 0.0, yaw: Double = 0.0) {
-        self.roll = roll
-        self.pitch = pitch
-        self.yaw = yaw
+    var state: OrientationState = .landscapeRight
+
+    init(state: OrientationState = .landscapeRight) {
+        self.state = state
     }
 }
 

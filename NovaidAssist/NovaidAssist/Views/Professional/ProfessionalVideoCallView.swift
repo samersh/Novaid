@@ -2,12 +2,14 @@ import SwiftUI
 
 struct ProfessionalVideoCallView: View {
     @StateObject private var multipeerService = MultipeerService.shared
+    @StateObject private var audioService = AudioService.shared
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var showControls = true
     @State private var isDrawingMode = false
     @State private var isAudioEnabled = true
+    @State private var isFlashlightOn = false
     @State private var showEndCallAlert = false
     @State private var controlsTimer: Timer?
 
@@ -20,8 +22,8 @@ struct ProfessionalVideoCallView: View {
                 // Calculate video frame bounds
                 let videoFrame = VideoFrameHelper.calculateVideoFrame(containerSize: geometry.size)
 
-                // Remote video from User's iPhone camera
-                RemoteVideoView()
+                // Remote video from User's iPhone camera (Metal-accelerated)
+                MetalVideoView()
                     .ignoresSafeArea()
 
                 // Annotations overlay - constrained to video area
@@ -83,12 +85,17 @@ struct ProfessionalVideoCallView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             setupAnnotationCallback()
+            setupAudioCallbacks()
+            // Start audio capture
+            audioService.startAudioCapture()
         }
         .onDisappear {
             // Re-enable screen sleep
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             OrientationManager.shared.unlock()
+            // Stop audio capture
+            audioService.stopAudioCapture()
         }
         .alert("End Call", isPresented: $showEndCallAlert) {
             Button("Cancel", role: .cancel) { }
@@ -236,7 +243,13 @@ struct ProfessionalVideoCallView: View {
 
             // Actions
             HStack(spacing: 20) {
-                Button(action: { callManager.clearAnnotations() }) {
+                Button(action: {
+                    callManager.clearAnnotations()
+                    // Also send clear command to iPhone
+                    if multipeerService.isConnected {
+                        multipeerService.sendClearAnnotations()
+                    }
+                }) {
                     Text("Clear All")
                         .font(.caption)
                         .foregroundColor(.red)
@@ -292,6 +305,13 @@ struct ProfessionalVideoCallView: View {
                 action: toggleDrawingMode
             )
 
+            // Flashlight button
+            ControlButton(
+                icon: isFlashlightOn ? "flashlight.on.fill" : "flashlight.off.fill",
+                isActive: isFlashlightOn,
+                action: toggleFlashlight
+            )
+
             // End call button
             Button(action: { showEndCallAlert = true }) {
                 ZStack {
@@ -311,6 +331,33 @@ struct ProfessionalVideoCallView: View {
     private func setupAnnotationCallback() {
         // Setup is now done via onAnnotationCreated callback in DrawingCanvasView
         // This method remains for any additional setup if needed
+    }
+
+    private func setupAudioCallbacks() {
+        // Handle incoming audio data from user
+        multipeerService.onAudioDataReceived = { [self] audioData in
+            audioService.playAudioData(audioData)
+        }
+
+        // Handle annotation updates with AR world positions from iPhone
+        multipeerService.onAnnotationUpdated = { [self] updatedAnnotation in
+            // Find and update the existing annotation with world position
+            if let index = callManager.annotations.firstIndex(where: { $0.id == updatedAnnotation.id }) {
+                callManager.annotations[index] = updatedAnnotation
+                print("[Professional] ✅ Updated annotation \(updatedAnnotation.id) with world position: \(updatedAnnotation.worldPosition?.debugDescription ?? "none")")
+            }
+        }
+
+        // Handle continuous annotation position updates for AR tracking
+        multipeerService.onAnnotationPositionUpdated = { [self] id, normalizedX, normalizedY in
+            // Update the annotation's position based on AR tracking from iPhone
+            if let index = callManager.annotations.firstIndex(where: { $0.id == id }) {
+                // Update the first point which represents the annotation's position
+                if !callManager.annotations[index].points.isEmpty {
+                    callManager.annotations[index].points[0] = AnnotationPoint(x: normalizedX, y: normalizedY)
+                }
+            }
+        }
     }
 
     private func toggleControls() {
@@ -335,6 +382,7 @@ struct ProfessionalVideoCallView: View {
 
     private func toggleAudio() {
         isAudioEnabled.toggle()
+        audioService.setMuted(!isAudioEnabled)
     }
 
     private func toggleFreeze() {
@@ -362,6 +410,13 @@ struct ProfessionalVideoCallView: View {
             showControls = true
         } else {
             startControlsTimer()
+        }
+    }
+
+    private func toggleFlashlight() {
+        isFlashlightOn.toggle()
+        if multipeerService.isConnected {
+            multipeerService.sendToggleFlashlight(on: isFlashlightOn)
         }
     }
 
