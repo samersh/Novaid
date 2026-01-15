@@ -205,6 +205,16 @@ class VideoCodecService: NSObject {
             return
         }
 
+        // Check if this is a keyframe
+        var isKeyframe = false
+        let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+        if let attachmentsArray = attachments as? [[CFString: Any]],
+           let firstAttachment = attachmentsArray.first {
+            if let dependsOnOthers = firstAttachment[kCMSampleAttachmentKey_DependsOnOthers] as? Bool {
+                isKeyframe = !dependsOnOthers
+            }
+        }
+
         // Copy data
         var length: Int = 0
         var dataPointer: UnsafeMutablePointer<Int8>?
@@ -221,15 +231,77 @@ class VideoCodecService: NSObject {
             return
         }
 
-        // Create Data object
-        let data = Data(bytes: dataPointer, count: length)
+        // Convert AVCC format to Annex-B format (for WebRTC compatibility)
+        // AVCC: [4-byte length][NAL data] → Annex-B: [0x00 0x00 0x00 0x01][NAL data]
+        var annexBData = Data()
+        let annexBStartCode: [UInt8] = [0x00, 0x00, 0x00, 0x01]
+
+        // For keyframes, prepend SPS/PPS
+        if isKeyframe {
+            if let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                // Get SPS
+                var spsPointer: UnsafePointer<UInt8>?
+                var spsSize: Int = 0
+                let spsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    formatDescription,
+                    parameterSetIndex: 0,
+                    parameterSetPointerOut: &spsPointer,
+                    parameterSetSizeOut: &spsSize,
+                    parameterSetCountOut: nil,
+                    nalUnitHeaderLengthOut: nil
+                )
+
+                if spsStatus == noErr, let spsPointer = spsPointer, spsSize > 0 {
+                    annexBData.append(contentsOf: annexBStartCode)
+                    annexBData.append(spsPointer, count: spsSize)
+                }
+
+                // Get PPS
+                var ppsPointer: UnsafePointer<UInt8>?
+                var ppsSize: Int = 0
+                let ppsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    formatDescription,
+                    parameterSetIndex: 1,
+                    parameterSetPointerOut: &ppsPointer,
+                    parameterSetSizeOut: &ppsSize,
+                    parameterSetCountOut: nil,
+                    nalUnitHeaderLengthOut: nil
+                )
+
+                if ppsStatus == noErr, let ppsPointer = ppsPointer, ppsSize > 0 {
+                    annexBData.append(contentsOf: annexBStartCode)
+                    annexBData.append(ppsPointer, count: ppsSize)
+                }
+            }
+        }
+
+        // Convert AVCC NAL units to Annex-B
+        var offset = 0
+        while offset < length {
+            // Read 4-byte length prefix (AVCC format)
+            let nalLength = Int(dataPointer.advanced(by: offset).withMemoryRebound(to: UInt32.self, capacity: 1) {
+                $0.pointee.bigEndian
+            })
+
+            offset += 4
+
+            // Add Annex-B start code
+            annexBData.append(contentsOf: annexBStartCode)
+
+            // Add NAL data
+            annexBData.append(dataPointer.advanced(by: offset), count: nalLength)
+
+            offset += nalLength
+        }
+
+        print("[VideoCodec] 📤 Encoded \(isKeyframe ? "KEYFRAME" : "frame"): \(annexBData.count) bytes")
 
         // Get presentation time
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
         // Call callback on main thread
         Task { @MainActor in
-            service.onEncodedFrame?(data, presentationTime)
+            service.onEncodedFrame?(annexBData, presentationTime)
         }
     }
 
@@ -447,15 +519,19 @@ class VideoCodecService: NSObject {
 
     /// Decode H.264 data to pixel buffer
     func decode(data: Data) {
+        print("[VideoCodec] 📥 Received H.264 data: \(data.count) bytes")
+
         decodingQueue.async { [weak self] in
             guard let self = self else { return }
 
             // If we don't have a decoder session, try to create format description from this data
             if self.decodingSession == nil {
+                print("[VideoCodec] No decoder yet, attempting to parse SPS/PPS...")
                 if let formatDesc = self.createFormatDescription(from: data) {
                     _ = self.setupDecoder(formatDescription: formatDesc)
                 } else {
                     // No SPS/PPS found yet, skip this frame
+                    print("[VideoCodec] ⚠️ No SPS/PPS found, skipping frame")
                     return
                 }
             }
@@ -563,6 +639,10 @@ class VideoCodecService: NSObject {
             print("[VideoCodec] ⚠️ No image buffer")
             return
         }
+
+        let width = CVPixelBufferGetWidth(imageBuffer)
+        let height = CVPixelBufferGetHeight(imageBuffer)
+        print("[VideoCodec] ✅ Decoded frame: \(width)x\(height)")
 
         // Get the service instance
         let service = Unmanaged<VideoCodecService>.fromOpaque(decompressionOutputRefCon!).takeUnretainedValue()
