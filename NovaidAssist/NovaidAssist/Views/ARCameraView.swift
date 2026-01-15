@@ -142,17 +142,32 @@ struct ARCameraView: UIViewRepresentable {
             // Create CIImage from pixel buffer
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-            // Send RAW camera image without rotation - display as-is
-            // ARKit captures in portrait orientation (sensor native)
-            let targetSize = CGSize(width: 480, height: 854)
-
+            // Create CGImage
             let context = CIContext(options: [.useSoftwareRenderer: false])
             guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
 
-            // Create UIImage
-            let uiImage = UIImage(cgImage: cgImage)
+            // Determine UIImage orientation based on device orientation
+            // This embeds rotation info in the image metadata (EXIF orientation)
+            let imageOrientation: UIImage.Orientation
+            switch orientationState {
+            case .portrait:
+                imageOrientation = .right  // ARKit captures landscape, rotate for portrait display
+            case .portraitUpsideDown:
+                imageOrientation = .left
+            case .landscapeLeft:
+                imageOrientation = .up
+            case .landscapeRight:
+                imageOrientation = .down
+            case .unknown:
+                imageOrientation = .right  // Default
+            }
 
-            // Resize to target dimensions
+            // Create UIImage with embedded orientation metadata
+            // This is the key: orientation is in the image, not applied as transform
+            let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: imageOrientation)
+
+            // Resize to target dimensions (maintains orientation metadata)
+            let targetSize = CGSize(width: 480, height: 640)
             UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
             uiImage.draw(in: CGRect(origin: .zero, size: targetSize))
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
