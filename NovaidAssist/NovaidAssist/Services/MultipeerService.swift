@@ -35,6 +35,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
     var onFrozenFrameReceived: ((UIImage) -> Void)?
+    var onAudioDataReceived: ((Data) -> Void)?
 
     // MARK: - Private Properties
     private var peerID: MCPeerID!
@@ -203,6 +204,21 @@ class MultipeerService: NSObject, ObservableObject {
         }
     }
 
+    /// Send audio data
+    func sendAudioData(_ audioData: Data) {
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        let message = MultipeerMessage(type: .audioData, payload: audioData)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+
+        // Send unreliable for low latency (like UDP)
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+        } catch {
+            // Silently fail for audio packets
+        }
+    }
+
     /// Send call request
     func sendCallRequest() {
         let message = MultipeerMessage(type: .callRequest, payload: nil)
@@ -361,6 +377,11 @@ extension MultipeerService: MCSessionDelegate {
                     self.onFrozenFrameReceived?(image)
                     print("[Multipeer] Received frozen frame")
                 }
+
+            case .audioData:
+                if let payload = message.payload {
+                    self.onAudioDataReceived?(payload)
+                }
             }
         }
     }
@@ -458,6 +479,7 @@ struct MultipeerMessage: Codable {
         case videoFrame
         case videoFrameWithOrientation
         case frozenFrame
+        case audioData
     }
 
     let type: MessageType

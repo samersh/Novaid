@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProfessionalVideoCallView: View {
     @StateObject private var multipeerService = MultipeerService.shared
+    @StateObject private var audioService = AudioService.shared
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -83,12 +84,17 @@ struct ProfessionalVideoCallView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             setupAnnotationCallback()
+            setupAudioCallbacks()
+            // Start audio capture
+            audioService.startAudioCapture()
         }
         .onDisappear {
             // Re-enable screen sleep
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             OrientationManager.shared.unlock()
+            // Stop audio capture
+            audioService.stopAudioCapture()
         }
         .alert("End Call", isPresented: $showEndCallAlert) {
             Button("Cancel", role: .cancel) { }
@@ -313,6 +319,13 @@ struct ProfessionalVideoCallView: View {
         // This method remains for any additional setup if needed
     }
 
+    private func setupAudioCallbacks() {
+        // Handle incoming audio data from user
+        multipeerService.onAudioDataReceived = { [self] audioData in
+            audioService.playAudioData(audioData)
+        }
+    }
+
     private func toggleControls() {
         withAnimation(.easeInOut(duration: 0.3)) {
             showControls.toggle()
@@ -335,6 +348,7 @@ struct ProfessionalVideoCallView: View {
 
     private func toggleAudio() {
         isAudioEnabled.toggle()
+        audioService.setMuted(!isAudioEnabled)
     }
 
     private func toggleFreeze() {

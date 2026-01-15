@@ -4,6 +4,7 @@ import AVFoundation
 struct UserVideoCallView: View {
     @StateObject private var multipeerService = MultipeerService.shared
     @StateObject private var arAnnotationManager = ARAnnotationManager()
+    @StateObject private var audioService = AudioService.shared
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -47,12 +48,17 @@ struct UserVideoCallView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             setupAnnotationCallbacks()
+            setupAudioCallbacks()
+            // Start audio capture
+            audioService.startAudioCapture()
         }
         .onDisappear {
             // Re-enable screen sleep
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             OrientationManager.shared.unlock()
+            // Stop audio capture
+            audioService.stopAudioCapture()
         }
         .alert("End Call", isPresented: $showEndCallAlert) {
             Button("Cancel", role: .cancel) { }
@@ -204,6 +210,13 @@ struct UserVideoCallView: View {
         }
     }
 
+    private func setupAudioCallbacks() {
+        // Handle incoming audio data from professional
+        multipeerService.onAudioDataReceived = { [self] audioData in
+            audioService.playAudioData(audioData)
+        }
+    }
+
     private func toggleControls() {
         withAnimation(.easeInOut(duration: 0.3)) {
             showControls.toggle()
@@ -224,6 +237,7 @@ struct UserVideoCallView: View {
 
     private func toggleAudio() {
         isAudioEnabled.toggle()
+        audioService.setMuted(!isAudioEnabled)
     }
 
     private func toggleVideo() {
