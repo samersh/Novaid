@@ -16,6 +16,8 @@ class VideoCodecService: NSObject {
     // MARK: - Decoder Properties
     private var decodingSession: VTDecompressionSession?
     private let decodingQueue = DispatchQueue(label: "com.novaid.videoDecoding", qos: .userInitiated)
+    private var formatDescription: CMFormatDescription?
+    private var frameCounter: Int64 = 0
 
     // MARK: - Configuration
     // Industry standard: 720p at 30fps for remote assistance
@@ -297,9 +299,10 @@ class VideoCodecService: NSObject {
 
     // MARK: - Decoder Setup
 
-    /// Initialize H.264 hardware decoder
-    func setupDecoder(width: Int32, height: Int32) -> Bool {
-        print("[VideoCodec] Setting up H.264 hardware decoder: \(width)x\(height)")
+    /// Initialize H.264 hardware decoder with format description
+    func setupDecoder(formatDescription: CMFormatDescription) -> Bool {
+        let dimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
+        print("[VideoCodec] Setting up H.264 hardware decoder: \(dimensions.width)x\(dimensions.height)")
 
         // Clean up existing session
         if let session = decodingSession {
@@ -307,28 +310,16 @@ class VideoCodecService: NSObject {
             decodingSession = nil
         }
 
-        // Create format description
-        var formatDescription: CMFormatDescription?
-        let status = CMVideoFormatDescriptionCreate(
-            allocator: kCFAllocatorDefault,
-            codecType: kCMVideoCodecType_H264,
-            width: width,
-            height: height,
-            extensions: nil,
-            formatDescriptionOut: &formatDescription
-        )
-
-        guard status == noErr, let formatDescription = formatDescription else {
-            print("[VideoCodec] ❌ Failed to create format description: \(status)")
-            return false
-        }
+        // Store format description
+        self.formatDescription = formatDescription
 
         // Destination image buffer attributes
         let imageBufferAttributes: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-            kCVPixelBufferWidthKey: width,
-            kCVPixelBufferHeightKey: height,
-            kCVPixelBufferIOSurfacePropertiesKey: [:]
+            kCVPixelBufferWidthKey: dimensions.width,
+            kCVPixelBufferHeightKey: dimensions.height,
+            kCVPixelBufferIOSurfacePropertiesKey: [:],
+            kCVPixelBufferMetalCompatibilityKey: true
         ]
 
         // Output callback
@@ -365,19 +356,109 @@ class VideoCodecService: NSObject {
         return true
     }
 
+    /// Create format description from SPS/PPS parameter sets
+    /// This is needed on the first frame or when stream parameters change
+    private func createFormatDescription(from h264Data: Data) -> CMFormatDescription? {
+        // Parse NAL units to find SPS and PPS
+        var spsData: Data?
+        var ppsData: Data?
+
+        var offset = 0
+        while offset < h264Data.count - 4 {
+            // Look for start code (0x00 0x00 0x00 0x01)
+            if h264Data[offset] == 0x00 &&
+               h264Data[offset + 1] == 0x00 &&
+               h264Data[offset + 2] == 0x00 &&
+               h264Data[offset + 3] == 0x01 {
+
+                let nalType = h264Data[offset + 4] & 0x1F
+
+                // Find next start code or end of data
+                var nalEndOffset = offset + 4
+                while nalEndOffset < h264Data.count - 4 {
+                    if h264Data[nalEndOffset] == 0x00 &&
+                       h264Data[nalEndOffset + 1] == 0x00 &&
+                       h264Data[nalEndOffset + 2] == 0x00 &&
+                       h264Data[nalEndOffset + 3] == 0x01 {
+                        break
+                    }
+                    nalEndOffset += 1
+                }
+
+                if nalEndOffset == h264Data.count - 4 {
+                    nalEndOffset = h264Data.count
+                }
+
+                // Extract NAL unit data (without start code)
+                let nalData = h264Data.subdata(in: (offset + 4)..<nalEndOffset)
+
+                if nalType == 7 { // SPS
+                    spsData = nalData
+                    print("[VideoCodec] Found SPS (\(nalData.count) bytes)")
+                } else if nalType == 8 { // PPS
+                    ppsData = nalData
+                    print("[VideoCodec] Found PPS (\(nalData.count) bytes)")
+                }
+
+                offset = nalEndOffset
+            } else {
+                offset += 1
+            }
+        }
+
+        // Create format description if we have both SPS and PPS
+        guard let spsData = spsData, let ppsData = ppsData else {
+            return nil
+        }
+
+        let parameterSets = [spsData, ppsData]
+        let parameterSetPointers = parameterSets.map { $0.withUnsafeBytes { $0.baseAddress! } }
+        let parameterSetSizes = parameterSets.map { $0.count }
+
+        var formatDescription: CMFormatDescription?
+        let status = CMVideoFormatDescriptionCreateFromH264ParameterSets(
+            allocator: kCFAllocatorDefault,
+            parameterSetCount: 2,
+            parameterSetPointers: parameterSetPointers,
+            parameterSetSizes: parameterSetSizes,
+            nalUnitHeaderLength: 4,
+            formatDescriptionOut: &formatDescription
+        )
+
+        if status == noErr {
+            print("[VideoCodec] ✅ Created format description from SPS/PPS")
+            return formatDescription
+        } else {
+            print("[VideoCodec] ❌ Failed to create format description: \(status)")
+            return nil
+        }
+    }
+
     // MARK: - Decoding
 
     /// Decode H.264 data to pixel buffer
-    func decode(data: Data, presentationTime: CMTime) {
-        guard let session = decodingSession else {
-            print("[VideoCodec] ⚠️ No decoding session")
-            return
-        }
+    func decode(data: Data) {
+        decodingQueue.async { [weak self] in
+            guard let self = self else { return }
 
-        decodingQueue.async {
+            // If we don't have a decoder session, try to create format description from this data
+            if self.decodingSession == nil {
+                if let formatDesc = self.createFormatDescription(from: data) {
+                    _ = self.setupDecoder(formatDescription: formatDesc)
+                } else {
+                    // No SPS/PPS found yet, skip this frame
+                    return
+                }
+            }
+
+            guard let session = self.decodingSession,
+                  let formatDescription = self.formatDescription else {
+                print("[VideoCodec] ⚠️ No decoding session or format description")
+                return
+            }
+
             // Create block buffer from data
             var blockBuffer: CMBlockBuffer?
-            let dataPointer = (data as NSData).bytes
             let createStatus = CMBlockBufferCreateWithMemoryBlock(
                 allocator: kCFAllocatorDefault,
                 memoryBlock: nil,
@@ -391,26 +472,72 @@ class VideoCodecService: NSObject {
             )
 
             guard createStatus == noErr, let blockBuffer = blockBuffer else {
-                print("[VideoCodec] ❌ Failed to create block buffer")
+                print("[VideoCodec] ❌ Failed to create block buffer: \(createStatus)")
                 return
             }
 
             // Copy data into block buffer
-            let replaceStatus = CMBlockBufferReplaceDataBytes(
-                with: dataPointer,
-                blockBuffer: blockBuffer,
-                offsetIntoDestination: 0,
-                dataLength: data.count
-            )
-
-            guard replaceStatus == noErr else {
-                print("[VideoCodec] ❌ Failed to copy data")
-                return
+            data.withUnsafeBytes { bytes in
+                guard let baseAddress = bytes.baseAddress else { return }
+                CMBlockBufferReplaceDataBytes(
+                    with: baseAddress,
+                    blockBuffer: blockBuffer,
+                    offsetIntoDestination: 0,
+                    dataLength: data.count
+                )
             }
 
             // Create sample buffer
-            // Note: This is simplified - production code would need proper format description
-            // For now, we'll need to reconstruct format from data
+            var sampleBuffer: CMSampleBuffer?
+
+            // Create timing info
+            let presentationTime = CMTime(value: self.frameCounter, timescale: 30)
+            var timingInfo = CMSampleTimingInfo(
+                duration: CMTime(value: 1, timescale: 30),
+                presentationTimeStamp: presentationTime,
+                decodeTimeStamp: .invalid
+            )
+
+            // Create sample buffer
+            let sampleStatus = CMSampleBufferCreateReady(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: blockBuffer,
+                formatDescription: formatDescription,
+                sampleCount: 1,
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timingInfo,
+                sampleSizeEntryCount: 0,
+                sampleSizeArray: nil,
+                sampleBufferOut: &sampleBuffer
+            )
+
+            guard sampleStatus == noErr, let sampleBuffer = sampleBuffer else {
+                print("[VideoCodec] ❌ Failed to create sample buffer: \(sampleStatus)")
+                return
+            }
+
+            // Set attachments for real-time decoding
+            let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true)
+            if let attachmentsArray = attachments as? [[CFString: Any]] {
+                var dict = attachmentsArray[0]
+                dict[kCMSampleAttachmentKey_DisplayImmediately] = kCFBooleanTrue
+            }
+
+            // Decode the frame
+            var flagsOut: VTDecodeFrameFlags = []
+            let decodeStatus = VTDecompressionSessionDecodeFrame(
+                session,
+                sampleBuffer: sampleBuffer,
+                flags: [._EnableAsynchronousDecompression],
+                frameRefcon: nil,
+                infoFlagsOut: &flagsOut
+            )
+
+            if decodeStatus != noErr {
+                print("[VideoCodec] ❌ Decoding failed: \(decodeStatus)")
+            }
+
+            self.frameCounter += 1
         }
     }
 

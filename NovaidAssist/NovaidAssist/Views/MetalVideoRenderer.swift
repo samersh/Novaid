@@ -389,12 +389,26 @@ struct MetalVideoView: UIViewRepresentable {
         let renderer = MetalVideoRenderer(frame: .zero)
         context.coordinator.renderer = renderer
 
-        // OPTIMIZED: Direct CVPixelBuffer transmission (zero-copy, proper YUV handling)
+        // Setup H.264 decoder for WebRTC-style low-latency video
+        let videoCodec = VideoCodecService.shared
+        context.coordinator.videoCodec = videoCodec
+
+        // PRIMARY: H.264 compressed frames (WebRTC-style - 20-100x smaller, <200ms latency)
+        multipeerService.onH264DataReceived = { h264Data in
+            videoCodec.decode(data: h264Data)
+        }
+
+        // Connect decoder output to renderer
+        videoCodec.onDecodedFrame = { pixelBuffer in
+            renderer.updatePixelBuffer(pixelBuffer)
+        }
+
+        // FALLBACK: Direct CVPixelBuffer transmission (for backwards compatibility)
         multipeerService.onPixelBufferReceived = { pixelBuffer in
             renderer.updatePixelBuffer(pixelBuffer)
         }
 
-        // Fallback: Legacy UIImage frames (DEPRECATED, for backwards compatibility)
+        // LEGACY: UIImage frames (DEPRECATED, for backwards compatibility)
         multipeerService.onVideoFrameReceived = { image in
             renderer.updateImage(image)
         }
@@ -403,6 +417,7 @@ struct MetalVideoView: UIViewRepresentable {
             renderer.updateImage(image)
         }
 
+        print("[MetalVideoView] ✅ H.264 decoder connected to Metal renderer")
         return renderer
     }
 
@@ -416,6 +431,7 @@ struct MetalVideoView: UIViewRepresentable {
 
     class Coordinator {
         var renderer: MetalVideoRenderer?
+        var videoCodec: VideoCodecService?
     }
 }
 
