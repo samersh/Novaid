@@ -412,18 +412,27 @@ class VideoCodecService: NSObject {
         }
 
         let parameterSets = [spsData, ppsData]
-        let parameterSetPointers = parameterSets.map { $0.withUnsafeBytes { $0.baseAddress! } }
         let parameterSetSizes = parameterSets.map { $0.count }
 
         var formatDescription: CMFormatDescription?
-        let status = CMVideoFormatDescriptionCreateFromH264ParameterSets(
-            allocator: kCFAllocatorDefault,
-            parameterSetCount: 2,
-            parameterSetPointers: parameterSetPointers,
-            parameterSetSizes: parameterSetSizes,
-            nalUnitHeaderLength: 4,
-            formatDescriptionOut: &formatDescription
-        )
+
+        // Create parameter set pointers with proper type casting
+        let status = parameterSets.withUnsafeBufferPointer { parameterSetsBuffer in
+            var parameterSetPointers = parameterSets.map { data in
+                data.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt8.self) }
+            }
+
+            return parameterSetPointers.withUnsafeMutableBufferPointer { pointers in
+                CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: 2,
+                    parameterSetPointers: pointers.baseAddress!,
+                    parameterSetSizes: parameterSetSizes,
+                    nalUnitHeaderLength: 4,
+                    formatDescriptionOut: &formatDescription
+                )
+            }
+        }
 
         if status == noErr {
             print("[VideoCodec] ✅ Created format description from SPS/PPS")
@@ -524,7 +533,7 @@ class VideoCodecService: NSObject {
             }
 
             // Decode the frame
-            var flagsOut: VTDecodeFrameFlags = []
+            var flagsOut: VTDecodeInfoFlags = []
             let decodeStatus = VTDecompressionSessionDecodeFrame(
                 session,
                 sampleBuffer: sampleBuffer,
