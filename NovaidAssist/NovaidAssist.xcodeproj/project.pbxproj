@@ -31,8 +31,7 @@
 		APP022 /* ARCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC021 /* ARCameraView.swift */; };
 		TST001 /* NovaidAssistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TST002 /* NovaidAssistTests.swift */; };
 		UTT001 /* NovaidAssistUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UTT002 /* NovaidAssistUITests.swift */; };
-		F7291F662BB64FA78C92F719 /* VideoShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A9706A40065C423EB6C5FFA7 /* VideoShaders.metal */; };
-	/* End PBXBuildFile section */
+/* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		PXY001 /* PBXContainerItemProxy */ = {
@@ -80,8 +79,7 @@
 		TST003 /* NovaidAssistTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NovaidAssistTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		UTT002 /* NovaidAssistUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NovaidAssistUITests.swift; sourceTree = "<group>"; };
 		UTT003 /* NovaidAssistUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NovaidAssistUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A9706A40065C423EB6C5FFA7 /* VideoShaders.metal */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.metal; path = VideoShaders.metal; sourceTree = "<group>"; };
-	/* End PBXFileReference section */
+/* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		FWK001 /* Frameworks */ = {
@@ -372,8 +370,7 @@
 				APP020 /* MultipeerService.swift in Sources */,
 				APP021 /* OrientationManager.swift in Sources */,
 				APP022 /* ARCameraView.swift in Sources */,
-			,
-				F7291F662BB64FA78C92F719 /* VideoShaders.metal in Sources */);
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		SRC101 /* Sources */ = {
@@ -381,8 +378,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				TST001 /* NovaidAssistTests.swift in Sources */,
-			,
-				F7291F662BB64FA78C92F719 /* VideoShaders.metal in Sources */);
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		SRC102 /* Sources */ = {
@@ -390,8 +386,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				UTT001 /* NovaidAssistUITests.swift in Sources */,
-			,
-				F7291F662BB64FA78C92F719 /* VideoShaders.metal in Sources */);
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
