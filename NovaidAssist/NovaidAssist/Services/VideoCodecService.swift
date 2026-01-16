@@ -691,7 +691,7 @@ class VideoCodecService: NSObject {
                     with: baseAddress,
                     blockBuffer: blockBuffer,
                     offsetIntoDestination: 0,
-                    dataLength: data.count
+                    dataLength: avccData.count  // Use AVCC size, not original Annex-B size
                 )
             }
 
