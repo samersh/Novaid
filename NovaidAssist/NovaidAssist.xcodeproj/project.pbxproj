@@ -29,6 +29,7 @@
 		APP020 /* MultipeerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC019 /* MultipeerService.swift */; };
 		APP021 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC020 /* OrientationManager.swift */; };
 		APP022 /* ARCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC021 /* ARCameraView.swift */; };
+		APP023 /* MetalVideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC103 /* MetalVideoRenderer.swift */; };
 		TST001 /* NovaidAssistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TST002 /* NovaidAssistTests.swift */; };
 		UTT001 /* NovaidAssistUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UTT002 /* NovaidAssistUITests.swift */; };
 /* End PBXBuildFile section */
@@ -72,6 +73,7 @@
 		SRC019 /* MultipeerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipeerService.swift; sourceTree = "<group>"; };
 		SRC020 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
 		SRC021 /* ARCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARCameraView.swift; sourceTree = "<group>"; };
+		SRC103 /* MetalVideoRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalVideoRenderer.swift; sourceTree = "<group>"; };
 		RES001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		RES002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		PRD001 /* NovaidAssist.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NovaidAssist.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -370,6 +372,7 @@
 				APP020 /* MultipeerService.swift in Sources */,
 				APP021 /* OrientationManager.swift in Sources */,
 				APP022 /* ARCameraView.swift in Sources */,
+				APP023 /* MetalVideoRenderer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
