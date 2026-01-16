@@ -12,8 +12,8 @@ class MetalVideoRenderer: UIView {
     private var metalLayer: CAMetalLayer!
     private var device: MTLDevice!
     private var commandQueue: MTLCommandQueue!
-    private var pipelineState: MTLRenderPipelineState!
-    private var yuvPipelineState: MTLRenderPipelineState!  // For YUV textures
+    private var pipelineState: MTLRenderPipelineState?
+    private var yuvPipelineState: MTLRenderPipelineState?  // For YUV textures (nil if shader fails to load)
     private var textureCache: CVMetalTextureCache!
     private var displayLink: CADisplayLink?
 
@@ -281,7 +281,14 @@ class MetalVideoRenderer: UIView {
             return
         }
 
-        renderEncoder.setRenderPipelineState(yuvPipelineState)
+        // Check if YUV pipeline is available (shader library must be loaded)
+        guard let pipelineState = yuvPipelineState else {
+            print("[Metal] ❌ YUV pipeline not initialized - shader library failed to load")
+            print("[Metal] 💡 Please ensure VideoShaders.metal is added to the Build Phases → Compile Sources")
+            return
+        }
+
+        renderEncoder.setRenderPipelineState(pipelineState)
 
         // Set YUV textures
         renderEncoder.setFragmentTexture(yMetalTexture, index: 0)  // Y plane
@@ -342,7 +349,14 @@ class MetalVideoRenderer: UIView {
             return
         }
 
-        renderEncoder.setRenderPipelineState(pipelineState)
+        // Check if BGRA pipeline is available (shader library must be loaded)
+        guard let bgra_pipelineState = pipelineState else {
+            print("[Metal] ❌ BGRA pipeline not initialized - shader library failed to load")
+            print("[Metal] 💡 Please ensure VideoShaders.metal is added to the Build Phases → Compile Sources")
+            return
+        }
+
+        renderEncoder.setRenderPipelineState(bgra_pipelineState)
 
         // Set texture
         renderEncoder.setFragmentTexture(texture, index: 0)
