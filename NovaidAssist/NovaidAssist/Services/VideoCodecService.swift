@@ -311,7 +311,62 @@ class VideoCodecService: NSObject {
         }
 
         // Create Data object
-        let data = Data(bytes: dataPointer, count: length)
+        var data = Data(bytes: dataPointer, count: length)
+
+        // Check if this is a keyframe (contains SPS/PPS)
+        let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+        var isKeyFrame = false
+        if let attachments = attachmentsArray as? [[CFString: Any]], let firstAttachment = attachments.first {
+            if let dependsOnOthers = firstAttachment[kCMSampleAttachmentKey_DependsOnOthers] as? Bool {
+                isKeyFrame = !dependsOnOthers
+            }
+        }
+
+        // For keyframes, prepend SPS/PPS from format description
+        if isKeyFrame {
+            if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                var spsSize: Int = 0
+                var spsCount: Int = 0
+                var spsPointer: UnsafePointer<UInt8>?
+
+                var ppsSize: Int = 0
+                var ppsCount: Int = 0
+                var ppsPointer: UnsafePointer<UInt8>?
+
+                // Extract SPS
+                let spsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    formatDesc, parameterSetIndex: 0, parameterSetPointerOut: &spsPointer,
+                    parameterSetSizeOut: &spsSize, parameterSetCountOut: &spsCount, nalUnitHeaderLengthOut: nil
+                )
+
+                // Extract PPS
+                let ppsStatus = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    formatDesc, parameterSetIndex: 1, parameterSetPointerOut: &ppsPointer,
+                    parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount, nalUnitHeaderLengthOut: nil
+                )
+
+                if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer {
+                    // Create new data with SPS/PPS prepended (with start codes)
+                    var fullData = Data()
+
+                    // Add SPS with start code
+                    fullData.append(Data([0x00, 0x00, 0x00, 0x01]))  // Start code
+                    fullData.append(Data(bytes: sps, count: spsSize))
+
+                    // Add PPS with start code
+                    fullData.append(Data([0x00, 0x00, 0x00, 0x01]))  // Start code
+                    fullData.append(Data(bytes: pps, count: ppsSize))
+
+                    // Add the frame data
+                    fullData.append(data)
+
+                    data = fullData
+                    print("[VideoCodec] 🔑 KEYFRAME: Added SPS(\(spsSize)B) + PPS(\(ppsSize)B) + Frame(\(length)B) = \(data.count)B total")
+                } else {
+                    print("[VideoCodec] ⚠️ KEYFRAME but failed to extract SPS/PPS from format description")
+                }
+            }
+        }
 
         // Call callback on main thread
         Task { @MainActor in
@@ -452,11 +507,20 @@ class VideoCodecService: NSObject {
     /// Create format description from SPS/PPS parameter sets
     /// This is needed on the first frame or when stream parameters change
     private func createFormatDescription(from h264Data: Data) -> CMFormatDescription? {
+        print("[VideoCodec] 🔍 Parsing H.264 data (\(h264Data.count) bytes) for SPS/PPS...")
+
+        // Show first 20 bytes to debug format
+        let previewBytes = h264Data.prefix(min(20, h264Data.count))
+        let hexString = previewBytes.map { String(format: "%02X", $0) }.joined(separator: " ")
+        print("[VideoCodec] First bytes: \(hexString)")
+
         // Parse NAL units to find SPS and PPS
         var spsData: Data?
         var ppsData: Data?
 
         var offset = 0
+        var nalUnitsFound: [Int] = []
+
         while offset < h264Data.count - 4 {
             // Look for start code (0x00 0x00 0x00 0x01)
             if h264Data[offset] == 0x00 &&
@@ -465,6 +529,7 @@ class VideoCodecService: NSObject {
                h264Data[offset + 3] == 0x01 {
 
                 let nalType = h264Data[offset + 4] & 0x1F
+                nalUnitsFound.append(Int(nalType))
 
                 // Find next start code or end of data
                 var nalEndOffset = offset + 4
@@ -487,10 +552,10 @@ class VideoCodecService: NSObject {
 
                 if nalType == 7 { // SPS
                     spsData = nalData
-                    print("[VideoCodec] Found SPS (\(nalData.count) bytes)")
+                    print("[VideoCodec] ✅ Found SPS (\(nalData.count) bytes)")
                 } else if nalType == 8 { // PPS
                     ppsData = nalData
-                    print("[VideoCodec] Found PPS (\(nalData.count) bytes)")
+                    print("[VideoCodec] ✅ Found PPS (\(nalData.count) bytes)")
                 }
 
                 offset = nalEndOffset
@@ -499,10 +564,16 @@ class VideoCodecService: NSObject {
             }
         }
 
+        // Log what NAL units were found
+        print("[VideoCodec] NAL units found: \(nalUnitsFound) (7=SPS, 8=PPS, 5=IDR, 1=Non-IDR)")
+
         // Create format description if we have both SPS and PPS
         guard let spsData = spsData, let ppsData = ppsData else {
+            print("[VideoCodec] ❌ Missing SPS or PPS - Cannot create format description")
             return nil
         }
+
+        print("[VideoCodec] 🎉 Have both SPS and PPS! Creating format description...")
 
         let parameterSets = [spsData, ppsData]
         let parameterSetSizes = parameterSets.map { $0.count }
