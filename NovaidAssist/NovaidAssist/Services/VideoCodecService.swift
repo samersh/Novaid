@@ -20,6 +20,13 @@ class VideoCodecService: NSObject {
     private var formatDescription: CMFormatDescription?
     private var frameCounter: Int64 = 0
 
+    // MARK: - Latency Tracking
+    private var lastEncodeStartTime: Date?
+    private var lastDecodeStartTime: Date?
+    private var encodeLatencies: [TimeInterval] = []
+    private var decodeLatencies: [TimeInterval] = []
+    private var lastLatencyLog: Date = Date()
+
     // MARK: - Configuration
     // Industry standard: 720p at 30fps for remote assistance
     private let targetWidth: Int32 = 720
@@ -157,6 +164,8 @@ class VideoCodecService: NSObject {
 
     /// Encode a pixel buffer to H.264
     func encode(pixelBuffer: CVPixelBuffer, presentationTime: CMTime) {
+        let encodeStartTime = Date() // Track encode start time
+
         guard let session = encodingSession else {
             print("[VideoCodec] ⚠️ No encoding session")
             return
@@ -164,6 +173,7 @@ class VideoCodecService: NSObject {
 
         encodingQueue.async { [weak self] in
             guard let self = self else { return }
+            self.lastEncodeStartTime = encodeStartTime
 
             // Force keyframe on first frame and every 60 frames (2 seconds @ 30fps)
             var frameProperties: [CFString: Any]? = nil
@@ -325,6 +335,25 @@ class VideoCodecService: NSObject {
             annexBData.append(nalPointer.assumingMemoryBound(to: UInt8.self), count: nalLength)
 
             offset += nalLength
+        }
+
+        // Track encode latency
+        if let startTime = service.lastEncodeStartTime {
+            let encodeLatency = Date().timeIntervalSince(startTime) * 1000 // ms
+            service.encodeLatencies.append(encodeLatency)
+
+            // Keep only last 30 latencies
+            if service.encodeLatencies.count > 30 {
+                service.encodeLatencies.removeFirst()
+            }
+
+            // Log every 3 seconds
+            let now = Date()
+            if now.timeIntervalSince(service.lastLatencyLog) >= 3.0 {
+                let avgLatency = service.encodeLatencies.reduce(0, +) / Double(service.encodeLatencies.count)
+                print("[VideoCodec] ⏱️  Average encode latency: \(String(format: "%.1f", avgLatency))ms")
+                service.lastLatencyLog = now
+            }
         }
 
         print("[VideoCodec] 📤 Encoded \(isKeyframe ? "KEYFRAME" : "frame"): \(annexBData.count) bytes")
@@ -632,10 +661,12 @@ class VideoCodecService: NSObject {
 
     /// Decode H.264 data to pixel buffer
     func decode(data: Data) {
+        let decodeStartTime = Date() // Track decode start time
         print("[VideoCodec] 📥 Received H.264 data: \(data.count) bytes")
 
         decodingQueue.async { [weak self] in
             guard let self = self else { return }
+            self.lastDecodeStartTime = decodeStartTime
 
             // If we don't have a decoder session, try to create format description from this data
             if self.decodingSession == nil {
@@ -767,10 +798,28 @@ class VideoCodecService: NSObject {
 
         let width = CVPixelBufferGetWidth(imageBuffer)
         let height = CVPixelBufferGetHeight(imageBuffer)
-        print("[VideoCodec] ✅ Decoded frame: \(width)x\(height)")
 
         // Get the service instance
         let service = Unmanaged<VideoCodecService>.fromOpaque(decompressionOutputRefCon!).takeUnretainedValue()
+
+        // Track decode latency
+        if let startTime = service.lastDecodeStartTime {
+            let decodeLatency = Date().timeIntervalSince(startTime) * 1000 // ms
+            service.decodeLatencies.append(decodeLatency)
+
+            // Keep only last 30 latencies
+            if service.decodeLatencies.count > 30 {
+                service.decodeLatencies.removeFirst()
+            }
+
+            // Log average decode latency (encoder logs every 3s, so we don't need to duplicate timing)
+            if !service.encodeLatencies.isEmpty && service.decodeLatencies.count >= 10 {
+                let avgLatency = service.decodeLatencies.reduce(0, +) / Double(service.decodeLatencies.count)
+                print("[VideoCodec] ⏱️  Average decode latency: \(String(format: "%.1f", avgLatency))ms")
+            }
+        }
+
+        print("[VideoCodec] ✅ Decoded frame: \(width)x\(height)")
 
         // Call callback on main thread
         Task { @MainActor in
