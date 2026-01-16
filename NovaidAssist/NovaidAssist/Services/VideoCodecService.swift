@@ -58,6 +58,7 @@ class VideoCodecService: NSObject {
 
     private override init() {
         super.init()
+        print("🚀🚀🚀 [VideoCodec] ULTRA-LOW LATENCY VERSION LOADED - v2.0 🚀🚀🚀")
     }
 
     // MARK: - Encoder Setup
