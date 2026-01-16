@@ -560,6 +560,66 @@ class VideoCodecService: NSObject {
 
     // MARK: - Decoding
 
+    /// Convert Annex-B format (start codes) to AVCC format (length prefixes)
+    private func convertAnnexBToAVCC(_ annexBData: Data) -> Data? {
+        var avccData = Data()
+        var offset = 0
+
+        while offset < annexBData.count - 4 {
+            // Look for start code (0x00 0x00 0x00 0x01)
+            if annexBData[offset] == 0x00 &&
+               annexBData[offset + 1] == 0x00 &&
+               annexBData[offset + 2] == 0x00 &&
+               annexBData[offset + 3] == 0x01 {
+
+                let nalType = annexBData[offset + 4] & 0x1F
+
+                // Find next start code or end of data
+                var nalEndOffset = offset + 4
+                while nalEndOffset < annexBData.count - 4 {
+                    if annexBData[nalEndOffset] == 0x00 &&
+                       annexBData[nalEndOffset + 1] == 0x00 &&
+                       annexBData[nalEndOffset + 2] == 0x00 &&
+                       annexBData[nalEndOffset + 3] == 0x01 {
+                        break
+                    }
+                    nalEndOffset += 1
+                }
+
+                if nalEndOffset == annexBData.count - 4 {
+                    nalEndOffset = annexBData.count
+                }
+
+                // Skip SPS and PPS NAL units (decoder doesn't need them in frames)
+                if nalType == 7 || nalType == 8 {
+                    offset = nalEndOffset
+                    continue
+                }
+
+                // Get NAL unit length (excluding start code)
+                let nalLength = nalEndOffset - (offset + 4)
+
+                // Write 4-byte length prefix (big endian)
+                var lengthBytes: [UInt8] = [
+                    UInt8((nalLength >> 24) & 0xFF),
+                    UInt8((nalLength >> 16) & 0xFF),
+                    UInt8((nalLength >> 8) & 0xFF),
+                    UInt8(nalLength & 0xFF)
+                ]
+                avccData.append(contentsOf: lengthBytes)
+
+                // Copy NAL data (without start code)
+                avccData.append(annexBData.subdata(in: (offset + 4)..<nalEndOffset))
+
+                offset = nalEndOffset
+            } else {
+                offset += 1
+            }
+        }
+
+        return avccData.isEmpty ? nil : avccData
+    }
+
     /// Decode H.264 data to pixel buffer
     func decode(data: Data) {
         print("[VideoCodec] 📥 Received H.264 data: \(data.count) bytes")
@@ -585,16 +645,23 @@ class VideoCodecService: NSObject {
                 return
             }
 
-            // Create block buffer from data
+            // Convert Annex-B format (start codes) to AVCC format (length prefixes)
+            // VTDecompressionSession expects AVCC format
+            guard let avccData = self.convertAnnexBToAVCC(data) else {
+                print("[VideoCodec] ❌ Failed to convert Annex-B to AVCC")
+                return
+            }
+
+            // Create block buffer from AVCC data
             var blockBuffer: CMBlockBuffer?
             let createStatus = CMBlockBufferCreateWithMemoryBlock(
                 allocator: kCFAllocatorDefault,
                 memoryBlock: nil,
-                blockLength: data.count,
+                blockLength: avccData.count,
                 blockAllocator: kCFAllocatorDefault,
                 customBlockSource: nil,
                 offsetToData: 0,
-                dataLength: data.count,
+                dataLength: avccData.count,
                 flags: 0,
                 blockBufferOut: &blockBuffer
             )
@@ -604,8 +671,8 @@ class VideoCodecService: NSObject {
                 return
             }
 
-            // Copy data into block buffer
-            data.withUnsafeBytes { bytes in
+            // Copy AVCC data into block buffer
+            avccData.withUnsafeBytes { bytes in
                 guard let baseAddress = bytes.baseAddress else { return }
                 CMBlockBufferReplaceDataBytes(
                     with: baseAddress,
