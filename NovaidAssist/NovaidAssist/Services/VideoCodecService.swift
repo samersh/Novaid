@@ -53,8 +53,10 @@ class VideoCodecService: NSObject {
     private var pendingEncodingFrames = 0
     private var pendingDecodingFrames = 0
     private let maxPendingFrames = 2  // Drop frames if more than 2 are pending
-    private var droppedFrames = 0
-    private var lastDropLog: Date = Date()
+    private var droppedEncodeFrames = 0
+    private var droppedDecodeFrames = 0
+    private var lastEncodeDropLog: Date = Date()
+    private var lastDecodeDropLog: Date = Date()
 
     private override init() {
         super.init()
@@ -201,8 +203,8 @@ class VideoCodecService: NSObject {
 
         // FRAME DROPPING: Check if encoder is overwhelmed
         if pendingEncodingFrames >= maxPendingFrames {
-            droppedFrames += 1
-            logFrameDropIfNeeded()
+            droppedEncodeFrames += 1
+            logEncodeDropIfNeeded()
             return  // Drop this frame to prevent queue buildup
         }
 
@@ -232,12 +234,21 @@ class VideoCodecService: NSObject {
         }
     }
 
-    private func logFrameDropIfNeeded() {
+    private func logEncodeDropIfNeeded() {
         let now = Date()
-        if now.timeIntervalSince(lastDropLog) >= 3.0 {
-            print("[VideoCodec] ⚠️ Dropped \(droppedFrames) frames in last 3s (encoder overwhelmed)")
-            droppedFrames = 0
-            lastDropLog = now
+        if now.timeIntervalSince(lastEncodeDropLog) >= 3.0 {
+            print("[VideoCodec] ⚠️ ENCODER dropped \(droppedEncodeFrames) frames in last 3s (overwhelmed)")
+            droppedEncodeFrames = 0
+            lastEncodeDropLog = now
+        }
+    }
+
+    private func logDecodeDropIfNeeded() {
+        let now = Date()
+        if now.timeIntervalSince(lastDecodeDropLog) >= 3.0 {
+            print("[VideoCodec] ⚠️ DECODER dropped \(droppedDecodeFrames) frames in last 3s (overwhelmed)")
+            droppedDecodeFrames = 0
+            lastDecodeDropLog = now
         }
     }
 
@@ -531,8 +542,9 @@ class VideoCodecService: NSObject {
     func decode(data: Data) {
         // FRAME DROPPING: Check if decoder is overwhelmed
         if pendingDecodingFrames >= maxPendingFrames {
-            droppedFrames += 1
-            logFrameDropIfNeeded()
+            droppedDecodeFrames += 1
+            logDecodeDropIfNeeded()
+            print("[VideoCodec] ⚠️ Dropping frame - \(pendingDecodingFrames) pending")
             return  // Drop this frame to prevent queue buildup
         }
 
@@ -544,10 +556,14 @@ class VideoCodecService: NSObject {
 
             // If we don't have a decoder session, try to create format description from this data
             if self.decodingSession == nil {
+                print("[VideoCodec] 🔍 Decoder not initialized, looking for SPS/PPS in frame...")
                 if let formatDesc = self.createFormatDescription(from: data) {
-                    _ = self.setupDecoder(formatDescription: formatDesc)
+                    print("[VideoCodec] ✅ Found SPS/PPS, initializing decoder...")
+                    if self.setupDecoder(formatDescription: formatDesc) {
+                        print("[VideoCodec] 🎉 Decoder ready to decode frames!")
+                    }
                 } else {
-                    // No SPS/PPS found yet, skip this frame
+                    print("[VideoCodec] ⏭️  No SPS/PPS yet, skipping frame")
                     self.pendingDecodingFrames -= 1
                     return
                 }
@@ -680,6 +696,8 @@ class VideoCodecService: NSObject {
             // Clean up
             service.frameDecodeStartTimes.removeValue(forKey: frameNumber)
         }
+
+        print("[VideoCodec] ✅ Frame decoded successfully, sending to Metal renderer")
 
         // Call callback on main thread
         Task { @MainActor in
