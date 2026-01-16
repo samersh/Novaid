@@ -31,6 +31,7 @@
 		APP022 /* ARCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC021 /* ARCameraView.swift */; };
 		APP023 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC103 /* AudioService.swift */; };
 		APP024 /* VideoCodecService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC104 /* VideoCodecService.swift */; };
+		APP025 /* PixelBufferTransmissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRC105 /* PixelBufferTransmissionService.swift */; };
 		TST001 /* NovaidAssistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TST002 /* NovaidAssistTests.swift */; };
 		UTT001 /* NovaidAssistUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UTT002 /* NovaidAssistUITests.swift */; };
 /* End PBXBuildFile section */
@@ -76,6 +77,7 @@
 		SRC021 /* ARCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARCameraView.swift; sourceTree = "<group>"; };
 		SRC103 /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
 		SRC104 /* VideoCodecService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCodecService.swift; sourceTree = "<group>"; };
+		SRC105 /* PixelBufferTransmissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelBufferTransmissionService.swift; sourceTree = "<group>"; };
 		RES001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		RES002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		PRD001 /* NovaidAssist.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NovaidAssist.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -179,6 +181,7 @@
 				SRC019 /* MultipeerService.swift */,
 				SRC103 /* AudioService.swift */,
 				SRC104 /* VideoCodecService.swift */,
+				SRC105 /* PixelBufferTransmissionService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -378,6 +381,7 @@
 				APP022 /* ARCameraView.swift in Sources */,
 				APP023 /* AudioService.swift in Sources */,
 				APP024 /* VideoCodecService.swift in Sources */,
+				APP025 /* PixelBufferTransmissionService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
