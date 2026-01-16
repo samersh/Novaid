@@ -42,8 +42,10 @@ class VideoCodecService: NSObject {
     var onDecodedFrame: ((CVPixelBuffer) -> Void)?
 
     // MARK: - Latency Monitoring
-    private var frameCaptureTimestamps: [Int64: Date] = [:]  // frameNumber -> captureTime
-    private var latencySamples: [TimeInterval] = []
+    private var frameCaptureTimestamps: [Int64: Date] = [:]  // frameNumber -> captureTime (iPhone only)
+    private var frameDecodeStartTimes: [Int64: Date] = [:]  // frameNumber -> decodeStartTime (iPad only)
+    private var encodeLatencySamples: [TimeInterval] = []  // iPhone encode latency
+    private var decodeLatencySamples: [TimeInterval] = []  // iPad decode latency
     private var lastLatencyLog: Date = Date()
     private let maxLatencySamples = 30  // Track last 30 frames
 
@@ -255,6 +257,19 @@ class VideoCodecService: NSObject {
         // Get the service instance
         let service = Unmanaged<VideoCodecService>.fromOpaque(outputCallbackRefCon!).takeUnretainedValue()
 
+        // LATENCY TRACKING: Measure encode latency (iPhone only)
+        let encodeEndTime = Date()
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let frameNumber = presentationTime.value
+
+        if let captureTime = service.frameCaptureTimestamps[frameNumber] {
+            let encodeLatency = encodeEndTime.timeIntervalSince(captureTime) * 1000  // Convert to ms
+            service.recordEncodeLatency(encodeLatency)
+
+            // Clean up
+            service.frameCaptureTimestamps.removeValue(forKey: frameNumber)
+        }
+
         // Extract encoded data
         guard CMSampleBufferDataIsReady(sampleBuffer) else {
             print("[VideoCodec] ⚠️ Sample buffer not ready")
@@ -285,9 +300,6 @@ class VideoCodecService: NSObject {
 
         // Create Data object
         let data = Data(bytes: dataPointer, count: length)
-
-        // Get presentation time
-        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
         // Call callback on main thread
         Task { @MainActor in
@@ -524,6 +536,7 @@ class VideoCodecService: NSObject {
         }
 
         pendingDecodingFrames += 1
+        let decodeStartTime = Date()  // LATENCY TRACKING: Record decode start time
 
         decodingQueue.async { [weak self] in
             guard let self = self else { return }
@@ -545,6 +558,10 @@ class VideoCodecService: NSObject {
                 self.pendingDecodingFrames -= 1
                 return
             }
+
+            // Store decode start time for this frame
+            let frameNum = self.frameCounter
+            self.frameDecodeStartTimes[frameNum] = decodeStartTime
 
             // Create block buffer from data
             var blockBuffer: CMBlockBuffer?
@@ -650,15 +667,17 @@ class VideoCodecService: NSObject {
         // Get the service instance
         let service = Unmanaged<VideoCodecService>.fromOpaque(decompressionOutputRefCon!).takeUnretainedValue()
 
-        // LATENCY TRACKING: Measure decode-to-display latency
-        let displayTime = Date()
+        // LATENCY TRACKING: Measure decode latency (iPad only)
+        let decodeEndTime = Date()
         let frameNumber = presentationTimeStamp.value
-        if let captureTime = service.frameCaptureTimestamps[frameNumber] {
-            let latency = displayTime.timeIntervalSince(captureTime) * 1000  // Convert to ms
-            service.recordLatency(latency)
 
-            // Clean up old timestamp
-            service.frameCaptureTimestamps.removeValue(forKey: frameNumber)
+        // Calculate decode-only latency (time spent in decoder)
+        if let decodeStartTime = service.frameDecodeStartTimes[frameNumber] {
+            let decodeLatency = decodeEndTime.timeIntervalSince(decodeStartTime) * 1000  // Convert to ms
+            service.recordDecodeLatency(decodeLatency)
+
+            // Clean up
+            service.frameDecodeStartTimes.removeValue(forKey: frameNumber)
         }
 
         // Call callback on main thread
@@ -669,23 +688,45 @@ class VideoCodecService: NSObject {
 
     // MARK: - Latency Monitoring
 
-    /// Record and log latency measurements
-    private func recordLatency(_ latencyMs: TimeInterval) {
-        latencySamples.append(latencyMs)
+    /// Record encode latency (iPhone only)
+    private func recordEncodeLatency(_ latencyMs: TimeInterval) {
+        encodeLatencySamples.append(latencyMs)
 
         // Keep only last N samples
-        if latencySamples.count > maxLatencySamples {
-            latencySamples.removeFirst()
+        if encodeLatencySamples.count > maxLatencySamples {
+            encodeLatencySamples.removeFirst()
         }
 
-        // Log average latency every 3 seconds
+        // Log average encode latency every 3 seconds
         let now = Date()
         if now.timeIntervalSince(lastLatencyLog) >= 3.0 {
-            let avgLatency = latencySamples.reduce(0, +) / Double(latencySamples.count)
-            let minLatency = latencySamples.min() ?? 0
-            let maxLatency = latencySamples.max() ?? 0
+            let avgLatency = encodeLatencySamples.reduce(0, +) / Double(encodeLatencySamples.count)
+            let minLatency = encodeLatencySamples.min() ?? 0
+            let maxLatency = encodeLatencySamples.max() ?? 0
 
-            print("[VideoCodec] 📊 Latency - Avg: \(String(format: "%.1f", avgLatency))ms, Min: \(String(format: "%.1f", minLatency))ms, Max: \(String(format: "%.1f", maxLatency))ms")
+            print("[VideoCodec] ⏱️  Encode latency - Avg: \(String(format: "%.1f", avgLatency))ms, Min: \(String(format: "%.1f", minLatency))ms, Max: \(String(format: "%.1f", maxLatency))ms")
+
+            lastLatencyLog = now
+        }
+    }
+
+    /// Record decode latency (iPad only)
+    private func recordDecodeLatency(_ latencyMs: TimeInterval) {
+        decodeLatencySamples.append(latencyMs)
+
+        // Keep only last N samples
+        if decodeLatencySamples.count > maxLatencySamples {
+            decodeLatencySamples.removeFirst()
+        }
+
+        // Log average decode latency every 3 seconds
+        let now = Date()
+        if now.timeIntervalSince(lastLatencyLog) >= 3.0 {
+            let avgLatency = decodeLatencySamples.reduce(0, +) / Double(decodeLatencySamples.count)
+            let minLatency = decodeLatencySamples.min() ?? 0
+            let maxLatency = decodeLatencySamples.max() ?? 0
+
+            print("[VideoCodec] ⏱️  Decode latency - Avg: \(String(format: "%.1f", avgLatency))ms, Min: \(String(format: "%.1f", minLatency))ms, Max: \(String(format: "%.1f", maxLatency))ms")
 
             lastLatencyLog = now
         }
