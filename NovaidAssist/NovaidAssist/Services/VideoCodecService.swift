@@ -312,7 +312,7 @@ class VideoCodecService: NSObject {
 
         // Create Data object and convert from AVCC to Annex B format
         let avccData = Data(bytes: dataPointer, count: length)
-        var data = convertAVCCToAnnexB(avccData)
+        var data = service.convertAVCCToAnnexB(avccData)
 
         // Check if this is a keyframe (contains SPS/PPS)
         let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
