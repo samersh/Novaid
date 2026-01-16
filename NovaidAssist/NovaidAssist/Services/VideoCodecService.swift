@@ -564,6 +564,8 @@ class VideoCodecService: NSObject {
     private func convertAnnexBToAVCC(_ annexBData: Data) -> Data? {
         var avccData = Data()
         var offset = 0
+        var nalUnitsConverted = 0
+        var nalTypes: [UInt8] = []
 
         while offset < annexBData.count - 4 {
             // Look for start code (0x00 0x00 0x00 0x01)
@@ -596,6 +598,9 @@ class VideoCodecService: NSObject {
                     continue
                 }
 
+                nalTypes.append(nalType)
+                nalUnitsConverted += 1
+
                 // Get NAL unit length (excluding start code)
                 let nalLength = nalEndOffset - (offset + 4)
 
@@ -616,6 +621,9 @@ class VideoCodecService: NSObject {
                 offset += 1
             }
         }
+
+        let typesString = nalTypes.map { String($0) }.joined(separator: ", ")
+        print("[VideoCodec] 🔄 Converted \(nalUnitsConverted) NAL units (types: \(typesString)): \(annexBData.count) → \(avccData.count) bytes")
 
         return avccData.isEmpty ? nil : avccData
     }
