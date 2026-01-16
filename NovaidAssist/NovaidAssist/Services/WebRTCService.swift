@@ -98,8 +98,9 @@ class WebRTCService: NSObject, ObservableObject {
         // Start capture session on background thread
         Task { @MainActor [weak self] in
             guard let self = self else { return }
+            let session = self.captureSession
             DispatchQueue.global(qos: .userInitiated).async {
-                self.captureSession?.startRunning()
+                session?.startRunning()
             }
         }
 

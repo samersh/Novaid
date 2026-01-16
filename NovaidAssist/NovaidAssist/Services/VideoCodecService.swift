@@ -141,12 +141,14 @@ class VideoCodecService: NSObject {
             value: kCFBooleanFalse // Disable for lower latency
         )
 
-        // Hardware acceleration
-        VTSessionSetProperty(
-            session,
-            key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
-            value: kCFBooleanTrue
-        )
+        // Hardware acceleration (iOS 17.4+, but enabled by default on all versions)
+        if #available(iOS 17.4, *) {
+            VTSessionSetProperty(
+                session,
+                key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+                value: kCFBooleanTrue
+            )
+        }
 
         print("[VideoCodec] Encoder configured: \(currentBitrate / 1_000_000) Mbps")
     }
@@ -166,7 +168,7 @@ class VideoCodecService: NSObject {
             // Force keyframe on first frame and every 60 frames (2 seconds @ 30fps)
             var frameProperties: [CFString: Any]? = nil
             if self.encodedFrameCount == 0 || self.encodedFrameCount % 60 == 0 {
-                frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue]
+                frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue as Any]
                 print("[VideoCodec] 🔑 Forcing keyframe at frame \(self.encodedFrameCount)")
             }
 
@@ -605,7 +607,7 @@ class VideoCodecService: NSObject {
                 let nalLength = nalEndOffset - (offset + 4)
 
                 // Write 4-byte length prefix (big endian)
-                var lengthBytes: [UInt8] = [
+                let lengthBytes: [UInt8] = [
                     UInt8((nalLength >> 24) & 0xFF),
                     UInt8((nalLength >> 16) & 0xFF),
                     UInt8((nalLength >> 8) & 0xFF),
