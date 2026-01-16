@@ -145,6 +145,7 @@ struct ARCameraView: UIViewRepresentable {
 
         private func processAndSendFrame(_ frame: ARFrame) {
             let pixelBuffer = frame.capturedImage
+            let captureTime = Date()  // LATENCY TRACKING: Record capture timestamp
 
             if isEncoderSetup {
                 // WebRTC-STYLE: H.264 hardware encoding (20-100x smaller than raw pixels)
@@ -154,7 +155,7 @@ struct ARCameraView: UIViewRepresentable {
                 // - Industry standard for real-time video (WebRTC, Zoom, etc.)
 
                 let presentationTime = CMTime(seconds: Double(frameNumber) / 30.0, preferredTimescale: 600)
-                videoCodec.encode(pixelBuffer: pixelBuffer, presentationTime: presentationTime)
+                videoCodec.encode(pixelBuffer: pixelBuffer, presentationTime: presentationTime, captureTime: captureTime)
                 frameNumber += 1
             } else {
                 // Fallback: Send pixel buffer directly (only if H.264 encoder failed)

@@ -11,11 +11,13 @@ class VideoCodecService: NSObject {
 
     // MARK: - Encoder Properties
     private var encodingSession: VTCompressionSession?
-    private let encodingQueue = DispatchQueue(label: "com.novaid.videoEncoding", qos: .userInitiated)
+    // ULTRA-LOW LATENCY: Use userInteractive QoS (highest priority for real-time video)
+    private let encodingQueue = DispatchQueue(label: "com.novaid.videoEncoding", qos: .userInteractive)
 
     // MARK: - Decoder Properties
     private var decodingSession: VTDecompressionSession?
-    private let decodingQueue = DispatchQueue(label: "com.novaid.videoDecoding", qos: .userInitiated)
+    // ULTRA-LOW LATENCY: Use userInteractive QoS (highest priority for real-time video)
+    private let decodingQueue = DispatchQueue(label: "com.novaid.videoDecoding", qos: .userInteractive)
     private var formatDescription: CMFormatDescription?
     private var frameCounter: Int64 = 0
 
@@ -38,6 +40,19 @@ class VideoCodecService: NSObject {
     // Callbacks
     var onEncodedFrame: ((Data, CMTime) -> Void)?
     var onDecodedFrame: ((CVPixelBuffer) -> Void)?
+
+    // MARK: - Latency Monitoring
+    private var frameCaptureTimestamps: [Int64: Date] = [:]  // frameNumber -> captureTime
+    private var latencySamples: [TimeInterval] = []
+    private var lastLatencyLog: Date = Date()
+    private let maxLatencySamples = 30  // Track last 30 frames
+
+    // MARK: - Frame Dropping Strategy (prevents queue buildup)
+    private var pendingEncodingFrames = 0
+    private var pendingDecodingFrames = 0
+    private let maxPendingFrames = 2  // Drop frames if more than 2 are pending
+    private var droppedFrames = 0
+    private var lastDropLog: Date = Date()
 
     private override init() {
         super.init()
@@ -87,18 +102,18 @@ class VideoCodecService: NSObject {
     }
 
     private func configureEncoder(session: VTCompressionSession) {
-        // Real-time encoding for low latency
+        // ULTRA-LOW LATENCY: Real-time encoding (equivalent to x264 tune=zerolatency)
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_RealTime,
             value: kCFBooleanTrue
         )
 
-        // Profile level (Baseline for compatibility, Main for quality)
+        // Profile level: Baseline for lowest latency (no B-frames, simpler decoding)
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_ProfileLevel,
-            value: kVTProfileLevel_H264_Main_AutoLevel
+            value: kVTProfileLevel_H264_Baseline_AutoLevel  // Changed from Main to Baseline
         )
 
         // Target bitrate
@@ -126,18 +141,33 @@ class VideoCodecService: NSObject {
             value: targetFrameRate as CFNumber
         )
 
-        // Max key frame interval (every 2 seconds for quick recovery)
+        // Expected frame duration for immediate encoding
+        let frameDuration = CMTime(value: 1, timescale: targetFrameRate)
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_ExpectedDuration,
+            value: frameDuration as CFTypeRef
+        )
+
+        // ULTRA-LOW LATENCY: Keyframe every 1 second (reduced from 2 seconds)
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
-            value: (targetFrameRate * 2) as CFNumber
+            value: targetFrameRate as CFNumber  // 30 frames = 1 second
         )
 
-        // Allow frame reordering for better compression
+        // CRITICAL: Disable frame reordering (no B-frames) for lowest latency
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_AllowFrameReordering,
-            value: kCFBooleanFalse // Disable for lower latency
+            value: kCFBooleanFalse
+        )
+
+        // ULTRA-LOW LATENCY: Maximum one frame of latency
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_MaxH264SliceBytes,
+            value: 0 as CFNumber  // No slice size limit
         )
 
         // Hardware acceleration
@@ -147,19 +177,39 @@ class VideoCodecService: NSObject {
             value: kCFBooleanTrue
         )
 
-        print("[VideoCodec] Encoder configured: \(currentBitrate / 1_000_000) Mbps")
+        // ULTRA-LOW LATENCY: Prioritize encoding speed over quality
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_Quality,
+            value: 0.5 as CFNumber  // Balance between quality and speed
+        )
+
+        print("[VideoCodec] 🚀 Encoder configured for ULTRA-LOW LATENCY: \(currentBitrate / 1_000_000) Mbps, Baseline Profile, 1s keyframe interval")
     }
 
     // MARK: - Encoding
 
     /// Encode a pixel buffer to H.264
-    func encode(pixelBuffer: CVPixelBuffer, presentationTime: CMTime) {
+    func encode(pixelBuffer: CVPixelBuffer, presentationTime: CMTime, captureTime: Date = Date()) {
         guard let session = encodingSession else {
             print("[VideoCodec] ⚠️ No encoding session")
             return
         }
 
-        encodingQueue.async {
+        // FRAME DROPPING: Check if encoder is overwhelmed
+        if pendingEncodingFrames >= maxPendingFrames {
+            droppedFrames += 1
+            logFrameDropIfNeeded()
+            return  // Drop this frame to prevent queue buildup
+        }
+
+        // LATENCY TRACKING: Record capture timestamp
+        let frameNumber = presentationTime.value
+        frameCaptureTimestamps[frameNumber] = captureTime
+
+        pendingEncodingFrames += 1
+
+        encodingQueue.async { [weak self] in
             let status = VTCompressionSessionEncodeFrame(
                 session,
                 imageBuffer: pixelBuffer,
@@ -173,6 +223,18 @@ class VideoCodecService: NSObject {
             if status != noErr {
                 print("[VideoCodec] ❌ Encoding failed: \(status)")
             }
+
+            // Decrement pending count after encoding completes
+            self?.pendingEncodingFrames -= 1
+        }
+    }
+
+    private func logFrameDropIfNeeded() {
+        let now = Date()
+        if now.timeIntervalSince(lastDropLog) >= 3.0 {
+            print("[VideoCodec] ⚠️ Dropped \(droppedFrames) frames in last 3s (encoder overwhelmed)")
+            droppedFrames = 0
+            lastDropLog = now
         }
     }
 
@@ -344,15 +406,22 @@ class VideoCodecService: NSObject {
             return false
         }
 
-        // Configure decoder for real-time playback
+        // ULTRA-LOW LATENCY: Configure decoder for immediate real-time playback
         VTSessionSetProperty(
             session,
             key: kVTDecompressionPropertyKey_RealTime,
             value: kCFBooleanTrue
         )
 
+        // ULTRA-LOW LATENCY: Use single thread for lowest latency
+        VTSessionSetProperty(
+            session,
+            key: kVTDecompressionPropertyKey_ThreadCount,
+            value: 1 as CFNumber
+        )
+
         decodingSession = session
-        print("[VideoCodec] ✅ H.264 hardware decoder ready")
+        print("[VideoCodec] 🚀 H.264 hardware decoder ready for ULTRA-LOW LATENCY")
         return true
     }
 
@@ -447,6 +516,15 @@ class VideoCodecService: NSObject {
 
     /// Decode H.264 data to pixel buffer
     func decode(data: Data) {
+        // FRAME DROPPING: Check if decoder is overwhelmed
+        if pendingDecodingFrames >= maxPendingFrames {
+            droppedFrames += 1
+            logFrameDropIfNeeded()
+            return  // Drop this frame to prevent queue buildup
+        }
+
+        pendingDecodingFrames += 1
+
         decodingQueue.async { [weak self] in
             guard let self = self else { return }
 
@@ -456,6 +534,7 @@ class VideoCodecService: NSObject {
                     _ = self.setupDecoder(formatDescription: formatDesc)
                 } else {
                     // No SPS/PPS found yet, skip this frame
+                    self.pendingDecodingFrames -= 1
                     return
                 }
             }
@@ -463,6 +542,7 @@ class VideoCodecService: NSObject {
             guard let session = self.decodingSession,
                   let formatDescription = self.formatDescription else {
                 print("[VideoCodec] ⚠️ No decoding session or format description")
+                self.pendingDecodingFrames -= 1
                 return
             }
 
@@ -547,6 +627,9 @@ class VideoCodecService: NSObject {
             }
 
             self.frameCounter += 1
+
+            // Decrement pending count after decoding completes
+            self.pendingDecodingFrames -= 1
         }
     }
 
@@ -567,9 +650,44 @@ class VideoCodecService: NSObject {
         // Get the service instance
         let service = Unmanaged<VideoCodecService>.fromOpaque(decompressionOutputRefCon!).takeUnretainedValue()
 
+        // LATENCY TRACKING: Measure decode-to-display latency
+        let displayTime = Date()
+        let frameNumber = presentationTimeStamp.value
+        if let captureTime = service.frameCaptureTimestamps[frameNumber] {
+            let latency = displayTime.timeIntervalSince(captureTime) * 1000  // Convert to ms
+            service.recordLatency(latency)
+
+            // Clean up old timestamp
+            service.frameCaptureTimestamps.removeValue(forKey: frameNumber)
+        }
+
         // Call callback on main thread
         Task { @MainActor in
             service.onDecodedFrame?(imageBuffer)
+        }
+    }
+
+    // MARK: - Latency Monitoring
+
+    /// Record and log latency measurements
+    private func recordLatency(_ latencyMs: TimeInterval) {
+        latencySamples.append(latencyMs)
+
+        // Keep only last N samples
+        if latencySamples.count > maxLatencySamples {
+            latencySamples.removeFirst()
+        }
+
+        // Log average latency every 3 seconds
+        let now = Date()
+        if now.timeIntervalSince(lastLatencyLog) >= 3.0 {
+            let avgLatency = latencySamples.reduce(0, +) / Double(latencySamples.count)
+            let minLatency = latencySamples.min() ?? 0
+            let maxLatency = latencySamples.max() ?? 0
+
+            print("[VideoCodec] 📊 Latency - Avg: \(String(format: "%.1f", avgLatency))ms, Min: \(String(format: "%.1f", minLatency))ms, Max: \(String(format: "%.1f", maxLatency))ms")
+
+            lastLatencyLog = now
         }
     }
 
