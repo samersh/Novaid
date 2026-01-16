@@ -686,13 +686,22 @@ extension MultipeerService: MCNearbyServiceBrowserDelegate {
             if let peerCode = info?["code"], peerCode == self.sessionCode {
                 // Found matching peer, auto-connect
                 print("[Multipeer] Found matching peer with code \(peerCode)")
+
+                // Add to list if not already there
                 if !self.availablePeers.contains(where: { $0.displayName == peerID.displayName }) {
                     self.availablePeers.append(peerID)
-                    // Auto-connect to matching peer
+                }
+
+                // Always try to invite when we find a matching code
+                // (even if peer is already in list from previous discovery with different code)
+                if !self.isConnected {
+                    print("[Multipeer] Inviting peer with matching code...")
                     self.invitePeer(peerID)
+                } else {
+                    print("[Multipeer] Already connected, skipping invite")
                 }
             } else {
-                // Just add to list
+                // Just add to list (wrong code, don't invite)
                 if !self.availablePeers.contains(where: { $0.displayName == peerID.displayName }) {
                     self.availablePeers.append(peerID)
                 }
