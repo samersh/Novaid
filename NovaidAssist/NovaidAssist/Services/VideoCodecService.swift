@@ -653,12 +653,19 @@ class VideoCodecService: NSObject {
 
     /// Decode H.264 data to pixel buffer
     func decode(data: Data) {
-        // FRAME DROPPING: Check if decoder is overwhelmed
-        if pendingDecodingFrames >= maxPendingFrames {
-            droppedDecodeFrames += 1
-            logDecodeDropIfNeeded()
-            print("[VideoCodec] ⚠️ Dropping frame - \(pendingDecodingFrames) pending")
-            return  // Drop this frame to prevent queue buildup
+        // CRITICAL: DON'T drop frames until decoder is initialized!
+        // We need to find the keyframe with SPS/PPS first
+        if decodingSession != nil {
+            // Decoder is initialized - apply frame dropping to prevent queue buildup
+            if pendingDecodingFrames >= maxPendingFrames {
+                droppedDecodeFrames += 1
+                logDecodeDropIfNeeded()
+                print("[VideoCodec] ⚠️ Dropping frame - \(pendingDecodingFrames) pending")
+                return
+            }
+        } else {
+            // Decoder not initialized - NEVER drop frames, we need to find SPS/PPS!
+            print("[VideoCodec] 🔍 Decoder not initialized - accepting all frames to find SPS/PPS")
         }
 
         pendingDecodingFrames += 1
@@ -669,7 +676,7 @@ class VideoCodecService: NSObject {
 
             // If we don't have a decoder session, try to create format description from this data
             if self.decodingSession == nil {
-                print("[VideoCodec] 🔍 Decoder not initialized, looking for SPS/PPS in frame...")
+                print("[VideoCodec] 🔍 Looking for SPS/PPS in frame (\(data.count) bytes)...")
                 if let formatDesc = self.createFormatDescription(from: data) {
                     print("[VideoCodec] ✅ Found SPS/PPS, initializing decoder...")
                     if self.setupDecoder(formatDescription: formatDesc) {
