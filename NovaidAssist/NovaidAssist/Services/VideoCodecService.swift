@@ -499,19 +499,16 @@ class VideoCodecService: NSObject {
                     nalEndOffset = h264Data.count
                 }
 
-                // Extract NAL unit data (without start code AND without NAL header byte)
-                // CMVideoFormatDescriptionCreateFromH264ParameterSets expects raw RBSP data
-                // offset+4 is the NAL header, offset+5 is where the actual parameter set data starts
-                if nalEndOffset > offset + 5 {
-                    let nalData = h264Data.subdata(in: (offset + 5)..<nalEndOffset)
+                // Extract NAL unit data (without start code, but WITH NAL header byte)
+                // CMVideoFormatDescriptionCreateFromH264ParameterSets expects complete NAL unit
+                let nalData = h264Data.subdata(in: (offset + 4)..<nalEndOffset)
 
-                    if nalType == 7 { // SPS
-                        spsData = nalData
-                        print("[VideoCodec] Found SPS (\(nalData.count) bytes, raw RBSP data)")
-                    } else if nalType == 8 { // PPS
-                        ppsData = nalData
-                        print("[VideoCodec] Found PPS (\(nalData.count) bytes, raw RBSP data)")
-                    }
+                if nalType == 7 { // SPS
+                    spsData = nalData
+                    print("[VideoCodec] Found SPS (\(nalData.count) bytes, with NAL header)")
+                } else if nalType == 8 { // PPS
+                    ppsData = nalData
+                    print("[VideoCodec] Found PPS (\(nalData.count) bytes, with NAL header)")
                 }
 
                 offset = nalEndOffset
@@ -528,26 +525,27 @@ class VideoCodecService: NSObject {
             return nil
         }
 
-        let parameterSets = [spsData, ppsData]
-        let parameterSetSizes = parameterSets.map { $0.count }
-
         var formatDescription: CMFormatDescription?
 
-        // Create parameter set pointers with proper type casting
-        let status = parameterSets.withUnsafeBufferPointer { parameterSetsBuffer in
-            var parameterSetPointers = parameterSets.map { data in
-                data.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt8.self) }
-            }
+        // Create format description with proper pointer lifetime management
+        let status = spsData.withUnsafeBytes { spsBytes in
+            ppsData.withUnsafeBytes { ppsBytes in
+                var parameterSetPointers: [UnsafePointer<UInt8>] = [
+                    spsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                    ppsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                ]
+                let parameterSetSizes = [spsData.count, ppsData.count]
 
-            return parameterSetPointers.withUnsafeMutableBufferPointer { pointers in
-                CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                    allocator: kCFAllocatorDefault,
-                    parameterSetCount: 2,
-                    parameterSetPointers: pointers.baseAddress!,
-                    parameterSetSizes: parameterSetSizes,
-                    nalUnitHeaderLength: 4,
-                    formatDescriptionOut: &formatDescription
-                )
+                return parameterSetPointers.withUnsafeMutableBufferPointer { pointers in
+                    CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                        allocator: kCFAllocatorDefault,
+                        parameterSetCount: 2,
+                        parameterSetPointers: pointers.baseAddress!,
+                        parameterSetSizes: parameterSetSizes,
+                        nalUnitHeaderLength: 4,
+                        formatDescriptionOut: &formatDescription
+                    )
+                }
             }
         }
 
