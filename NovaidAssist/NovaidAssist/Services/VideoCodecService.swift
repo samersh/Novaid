@@ -345,7 +345,7 @@ class VideoCodecService: NSObject {
                     parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount, nalUnitHeaderLengthOut: nil
                 )
 
-                if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer {
+                if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer, spsSize > 0, ppsSize > 0 {
                     // Create new data with SPS/PPS prepended (with start codes)
                     var fullData = Data()
 
@@ -363,8 +363,10 @@ class VideoCodecService: NSObject {
                     data = fullData
                     print("[VideoCodec] 🔑 KEYFRAME: Added SPS(\(spsSize)B) + PPS(\(ppsSize)B) + Frame(\(length)B) = \(data.count)B total")
                 } else {
-                    print("[VideoCodec] ⚠️ KEYFRAME but failed to extract SPS/PPS from format description")
+                    print("[VideoCodec] ⚠️ KEYFRAME but failed to extract SPS/PPS (spsStatus=\(spsStatus), ppsStatus=\(ppsStatus))")
                 }
+            } else {
+                print("[VideoCodec] ⚠️ KEYFRAME but no format description available")
             }
         }
 
