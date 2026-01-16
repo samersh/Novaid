@@ -191,32 +191,41 @@ class MultipeerService: NSObject, ObservableObject {
 
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
-        guard let data = try? JSONEncoder().encode(message) else { return }
+        // For large frames, send RAW data with simple prefix to avoid JSON encoding overhead
+        // JSON encoding adds ~33% size (base64), which can push frames over size limits
+        let isLargeFrame = h264Data.count > 10000  // 10KB threshold
 
-        // CRITICAL: Use reliable mode for large frames (keyframes with SPS/PPS)
-        // MultipeerConnectivity's unreliable mode has ~4KB packet limit
-        // Frames larger than this get silently dropped!
-        let isLargeFrame = data.count > 10000  // 10KB threshold
-        let mode: MCSessionSendDataMode = isLargeFrame ? .reliable : .unreliable
-
+        var dataToSend: Data
         if isLargeFrame {
-            print("[Multipeer] 📦 Sending LARGE frame (\(data.count) bytes) via RELIABLE mode")
+            // Send raw H.264 data with 1-byte type prefix (no JSON overhead)
+            // Prefix: 0xFF = raw H.264 keyframe
+            var rawData = Data([0xFF])
+            rawData.append(h264Data)
+            dataToSend = rawData
+            print("[Multipeer] 📦 Sending LARGE frame (\(h264Data.count) bytes → \(dataToSend.count) bytes RAW)")
+        } else {
+            // Small frames: use normal JSON encoding
+            let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
+            guard let encodedData = try? JSONEncoder().encode(message) else { return }
+            dataToSend = encodedData
         }
+
+        // Use reliable mode for large frames, unreliable for small
+        let mode: MCSessionSendDataMode = isLargeFrame ? .reliable : .unreliable
 
         // Send with appropriate mode
         do {
-            try session.send(data, toPeers: session.connectedPeers, with: mode)
+            try session.send(dataToSend, toPeers: session.connectedPeers, with: mode)
             framesSent += 1
             totalFramesSent += 1
-            totalBytesSent += Int64(data.count)
+            totalBytesSent += Int64(dataToSend.count)
             adjustQualityIfNeeded()
             logNetworkStatsIfNeeded()
         } catch {
             framesFailed += 1
             totalFramesFailed += 1
             adjustQualityIfNeeded()
-            print("[Multipeer] ❌ Failed to send frame (\(data.count) bytes): \(error)")
+            print("[Multipeer] ❌ Failed to send frame (\(dataToSend.count) bytes): \(error)")
         }
     }
 
@@ -536,8 +545,21 @@ extension MultipeerService: MCSessionDelegate {
     }
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        // Parse message
+        // Check if this is raw H.264 data (large frame with 0xFF prefix)
+        if data.count > 1 && data[0] == 0xFF {
+            // Raw H.264 keyframe - extract actual H.264 data (skip 1-byte prefix)
+            let h264Data = data.subdata(in: 1..<data.count)
+            print("[Multipeer] 📥 Received RAW H.264 frame: \(h264Data.count) bytes")
+
+            Task { @MainActor in
+                self.onH264DataReceived?(h264Data)
+            }
+            return
+        }
+
+        // Parse JSON-encoded message (small frames and other messages)
         guard let message = try? JSONDecoder().decode(MultipeerMessage.self, from: data) else {
+            print("[Multipeer] ⚠️ Failed to decode message (\(data.count) bytes)")
             return
         }
 
