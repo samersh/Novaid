@@ -393,6 +393,17 @@ struct MetalVideoView: UIViewRepresentable {
         let videoCodec = VideoCodecService.shared
         context.coordinator.videoCodec = videoCodec
 
+        // SPS/PPS: Initialize decoder when format description arrives (sent once at stream start)
+        multipeerService.onSPSPPSReceived = { spsData, ppsData in
+            print("[MetalVideoView] 🎬 Received SPS/PPS, initializing decoder...")
+            let success = videoCodec.setupDecoderFromSPSPPS(spsData: spsData, ppsData: ppsData)
+            if success {
+                print("[MetalVideoView] ✅ Decoder initialized and ready for frames!")
+            } else {
+                print("[MetalVideoView] ❌ Failed to initialize decoder from SPS/PPS")
+            }
+        }
+
         // PRIMARY: H.264 compressed frames (WebRTC-style - 20-100x smaller, <200ms latency)
         multipeerService.onH264DataReceived = { h264Data in
             videoCodec.decode(data: h264Data)

@@ -40,6 +40,7 @@ class VideoCodecService: NSObject {
     // Callbacks
     var onEncodedFrame: ((Data, CMTime) -> Void)?
     var onDecodedFrame: ((CVPixelBuffer) -> Void)?
+    var onSPSPPSExtracted: ((Data, Data) -> Void)?  // (SPS, PPS) - sent once at start
 
     // MARK: - Latency Monitoring
     private var frameCaptureTimestamps: [Int64: Date] = [:]  // frameNumber -> captureTime (iPhone only)
@@ -57,6 +58,9 @@ class VideoCodecService: NSObject {
     private var droppedDecodeFrames = 0
     private var lastEncodeDropLog: Date = Date()
     private var lastDecodeDropLog: Date = Date()
+
+    // MARK: - SPS/PPS Handling
+    private var hasSentSPSPPS = false  // Track if we've sent SPS/PPS to decoder
 
     private override init() {
         super.init()
@@ -323,8 +327,9 @@ class VideoCodecService: NSObject {
             }
         }
 
-        // For keyframes, prepend SPS/PPS from format description
-        if isKeyFrame {
+        // On first keyframe, extract and send SPS/PPS separately (out-of-band)
+        // This is proper H.264 streaming: format description sent once, not with every keyframe!
+        if isKeyFrame && !service.hasSentSPSPPS {
             if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
                 var spsSize: Int = 0
                 var spsCount: Int = 0
@@ -347,31 +352,26 @@ class VideoCodecService: NSObject {
                 )
 
                 if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer, spsSize > 0, ppsSize > 0 {
-                    // Create new data with SPS/PPS prepended (with start codes)
-                    var fullData = Data()
+                    let spsData = Data(bytes: sps, count: spsSize)
+                    let ppsData = Data(bytes: pps, count: ppsSize)
 
-                    // Add SPS with start code
-                    fullData.append(Data([0x00, 0x00, 0x00, 0x01]))  // Start code
-                    fullData.append(Data(bytes: sps, count: spsSize))
+                    print("[VideoCodec] 🎬 Extracted SPS(\(spsSize)B) + PPS(\(ppsSize)B) - sending separately!")
+                    service.hasSentSPSPPS = true
 
-                    // Add PPS with start code
-                    fullData.append(Data([0x00, 0x00, 0x00, 0x01]))  // Start code
-                    fullData.append(Data(bytes: pps, count: ppsSize))
-
-                    // Add the frame data (already in Annex B format after conversion)
-                    fullData.append(data)
-
-                    data = fullData
-                    print("[VideoCodec] 🔑 KEYFRAME: Added SPS(\(spsSize)B) + PPS(\(ppsSize)B) + Frame(\(length)B) = \(data.count)B total")
-                } else {
-                    print("[VideoCodec] ⚠️ KEYFRAME but failed to extract SPS/PPS (spsStatus=\(spsStatus), ppsStatus=\(ppsStatus))")
+                    // Send SPS/PPS separately via callback
+                    Task { @MainActor in
+                        service.onSPSPPSExtracted?(spsData, ppsData)
+                    }
                 }
-            } else {
-                print("[VideoCodec] ⚠️ KEYFRAME but no format description available")
             }
         }
 
-        // Call callback on main thread
+        if isKeyFrame {
+            print("[VideoCodec] 🔑 KEYFRAME: \(data.count) bytes (SPS/PPS sent separately)")
+        }
+
+        // Send frame data WITHOUT SPS/PPS prepended
+        // This makes keyframes much smaller (~60KB instead of 168KB)!
         Task { @MainActor in
             service.onEncodedFrame?(data, presentationTime)
         }
@@ -481,6 +481,45 @@ class VideoCodecService: NSObject {
     }
 
     // MARK: - Decoder Setup
+
+    /// Initialize H.264 hardware decoder from SPS/PPS (proper H.264 streaming)
+    /// This is the correct way to initialize: receive format description out-of-band
+    func setupDecoderFromSPSPPS(spsData: Data, ppsData: Data) -> Bool {
+        print("[VideoCodec] 🎬 Creating decoder from SPS(\(spsData.count)B) + PPS(\(ppsData.count)B)")
+
+        // Create format description from SPS/PPS
+        let parameterSets = [spsData, ppsData]
+        let parameterSetSizes = parameterSets.map { $0.count }
+
+        var formatDescription: CMFormatDescription?
+
+        let status = parameterSets.withUnsafeBufferPointer { parameterSetsBuffer in
+            var parameterSetPointers = parameterSets.map { data in
+                data.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt8.self) }
+            }
+
+            return parameterSetPointers.withUnsafeMutableBufferPointer { pointers in
+                CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: 2,
+                    parameterSetPointers: pointers.baseAddress!,
+                    parameterSetSizes: parameterSetSizes,
+                    nalUnitHeaderLength: 4,
+                    formatDescriptionOut: &formatDescription
+                )
+            }
+        }
+
+        guard status == noErr, let formatDesc = formatDescription else {
+            print("[VideoCodec] ❌ Failed to create format description from SPS/PPS: \(status)")
+            return false
+        }
+
+        print("[VideoCodec] ✅ Created format description from SPS/PPS")
+
+        // Now setup the decoder with this format description
+        return setupDecoder(formatDescription: formatDesc)
+    }
 
     /// Initialize H.264 hardware decoder with format description
     func setupDecoder(formatDescription: CMFormatDescription) -> Bool {

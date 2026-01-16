@@ -41,6 +41,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onVideoFrameReceived: ((UIImage) -> Void)?
     var onPixelBufferReceived: ((CVPixelBuffer) -> Void)?  // New: for direct pixel buffer transmission
     var onH264DataReceived: ((Data) -> Void)?  // H.264 compressed frames (WebRTC-style, 20-100x smaller)
+    var onSPSPPSReceived: ((Data, Data) -> Void)?  // SPS/PPS parameter sets (sent once at stream start)
     var onFrozenFrameReceived: ((UIImage) -> Void)?
     var onAudioDataReceived: ((Data) -> Void)?
 
@@ -179,6 +180,38 @@ class MultipeerService: NSObject, ObservableObject {
     func sendMessage(_ message: MultipeerMessage) {
         guard let data = try? JSONEncoder().encode(message) else { return }
         sendData(data)
+    }
+
+    /// Send SPS/PPS parameter sets (sent once at stream start, out-of-band)
+    /// This is proper H.264 streaming: format description sent separately from frames
+    func sendSPSPPS(spsData: Data, ppsData: Data) {
+        guard isConnected, !session.connectedPeers.isEmpty else { return }
+
+        // Encode SPS/PPS into a single payload
+        struct SPSPPSPayload: Codable {
+            let sps: Data
+            let pps: Data
+        }
+
+        let payload = SPSPPSPayload(sps: spsData, pps: ppsData)
+        guard let payloadData = try? JSONEncoder().encode(payload) else {
+            print("[Multipeer] ❌ Failed to encode SPS/PPS")
+            return
+        }
+
+        let message = MultipeerMessage(type: .spsPps, payload: payloadData)
+        guard let messageData = try? JSONEncoder().encode(message) else {
+            print("[Multipeer] ❌ Failed to encode SPS/PPS message")
+            return
+        }
+
+        // Send reliably - SPS/PPS is critical for decoder initialization
+        do {
+            try session.send(messageData, toPeers: session.connectedPeers, with: .reliable)
+            print("[Multipeer] 🎬 Sent SPS(\(spsData.count)B) + PPS(\(ppsData.count)B) to decoder")
+        } catch {
+            print("[Multipeer] ❌ Failed to send SPS/PPS: \(error)")
+        }
     }
 
     /// Send H.264 compressed frame (WebRTC-style, 20-100x smaller than raw pixels)
@@ -634,6 +667,19 @@ extension MultipeerService: MCSessionDelegate {
                     self.onVideoFrameReceived?(image)
                 }
 
+            case .spsPps:
+                // SPS/PPS parameter sets (sent once at stream start for decoder initialization)
+                if let payload = message.payload {
+                    struct SPSPPSPayload: Codable {
+                        let sps: Data
+                        let pps: Data
+                    }
+                    if let spsPpsPayload = try? JSONDecoder().decode(SPSPPSPayload.self, from: payload) {
+                        print("[Multipeer] 🎬 Received SPS(\(spsPpsPayload.sps.count)B) + PPS(\(spsPpsPayload.pps.count)B)")
+                        self.onSPSPPSReceived?(spsPpsPayload.sps, spsPpsPayload.pps)
+                    }
+                }
+
             case .h264Frame:
                 // WebRTC-STYLE: H.264 compressed frame (20-100x smaller, industry standard)
                 if let payload = message.payload {
@@ -775,6 +821,7 @@ struct MultipeerMessage: Codable {
         case videoFrameWithOrientation
         case pixelBufferFrame  // CVPixelBuffer transmission (raw YUV ~1.3MB/frame)
         case h264Frame  // H.264 compressed frame (10-50KB/frame - WebRTC standard)
+        case spsPps  // SPS/PPS parameter sets (sent once at stream start)
         case frozenFrame
         case audioData
     }

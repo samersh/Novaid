@@ -100,6 +100,11 @@ struct ARCameraView: UIViewRepresentable {
                 isEncoderSetup = true
                 print("[AR] ✅ H.264 hardware encoder setup (720p @ 30fps)")
 
+                // Setup callback for SPS/PPS extraction (sent once at stream start)
+                videoCodec.onSPSPPSExtracted = { [weak self] spsData, ppsData in
+                    self?.sendSPSPPS(spsData: spsData, ppsData: ppsData)
+                }
+
                 // Setup callback for encoded frames
                 videoCodec.onEncodedFrame = { [weak self] h264Data, presentationTime in
                     self?.sendH264Frame(h264Data)
@@ -177,6 +182,12 @@ struct ARCameraView: UIViewRepresentable {
                 Task { @MainActor in
                     self.lastCapturedFrame = thumbnailImage
                 }
+            }
+        }
+
+        private func sendSPSPPS(spsData: Data, ppsData: Data) {
+            Task { @MainActor in
+                MultipeerService.shared.sendSPSPPS(spsData: spsData, ppsData: ppsData)
             }
         }
 
