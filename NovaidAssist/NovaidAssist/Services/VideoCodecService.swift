@@ -639,7 +639,12 @@ class VideoCodecService: NSObject {
             if self.decodingSession == nil {
                 print("[VideoCodec] No decoder yet, attempting to parse SPS/PPS...")
                 if let formatDesc = self.createFormatDescription(from: data) {
-                    _ = self.setupDecoder(formatDescription: formatDesc)
+                    if !self.setupDecoder(formatDescription: formatDesc) {
+                        print("[VideoCodec] ❌ Failed to setup decoder")
+                        return
+                    }
+                    print("[VideoCodec] ✅ Decoder setup complete, will now decode this keyframe")
+                    // Continue to decode this keyframe (contains IDR frame which is needed as reference)
                 } else {
                     // No SPS/PPS found yet, skip this frame
                     print("[VideoCodec] ⚠️ No SPS/PPS found, skipping frame")
