@@ -33,10 +33,10 @@ class VideoCodecService: NSObject {
     private let targetHeight: Int32 = 1280
     private let targetFrameRate: Int32 = 30
 
-    // Adaptive bitrate: Start at 2.5 Mbps, adjust based on network
-    private var currentBitrate: Int = 2_500_000 // 2.5 Mbps
+    // Adaptive bitrate: Start lower for reduced latency
+    private var currentBitrate: Int = 2_000_000 // 2.0 Mbps (reduced from 2.5 for lower latency)
     private let minBitrate: Int = 500_000       // 500 Kbps
-    private let maxBitrate: Int = 4_000_000     // 4 Mbps
+    private let maxBitrate: Int = 3_000_000     // 3 Mbps (reduced from 4 for lower latency)
 
     // Network monitoring
     private var packetsLost: Int = 0
@@ -175,9 +175,10 @@ class VideoCodecService: NSObject {
             guard let self = self else { return }
             self.lastEncodeStartTime = encodeStartTime
 
-            // Force keyframe on first frame and every 60 frames (2 seconds @ 30fps)
+            // Force keyframe on first frame and every 120 frames (4 seconds @ 30fps)
+            // Reduced frequency to minimize latency from keyframe processing
             var frameProperties: [CFString: Any]? = nil
-            if self.encodedFrameCount == 0 || self.encodedFrameCount % 60 == 0 {
+            if self.encodedFrameCount == 0 || self.encodedFrameCount % 120 == 0 {
                 frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue as Any]
                 print("[VideoCodec] 🔑 Forcing keyframe at frame \(self.encodedFrameCount)")
             }
