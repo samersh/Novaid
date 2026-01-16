@@ -310,8 +310,9 @@ class VideoCodecService: NSObject {
             return
         }
 
-        // Create Data object
-        var data = Data(bytes: dataPointer, count: length)
+        // Create Data object and convert from AVCC to Annex B format
+        let avccData = Data(bytes: dataPointer, count: length)
+        var data = convertAVCCToAnnexB(avccData)
 
         // Check if this is a keyframe (contains SPS/PPS)
         let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
@@ -357,7 +358,7 @@ class VideoCodecService: NSObject {
                     fullData.append(Data([0x00, 0x00, 0x00, 0x01]))  // Start code
                     fullData.append(Data(bytes: pps, count: ppsSize))
 
-                    // Add the frame data
+                    // Add the frame data (already in Annex B format after conversion)
                     fullData.append(data)
 
                     data = fullData
@@ -374,6 +375,45 @@ class VideoCodecService: NSObject {
         Task { @MainActor in
             service.onEncodedFrame?(data, presentationTime)
         }
+    }
+
+    /// Convert H.264 data from AVCC format (length-prefixed) to Annex B format (start code prefixed)
+    private func convertAVCCToAnnexB(_ avccData: Data) -> Data {
+        var annexBData = Data()
+        var offset = 0
+
+        while offset < avccData.count {
+            // Check if we have at least 4 bytes for the length
+            guard offset + 4 <= avccData.count else {
+                break
+            }
+
+            // Read the 4-byte length prefix (big-endian)
+            let length = (UInt32(avccData[offset]) << 24) |
+                        (UInt32(avccData[offset + 1]) << 16) |
+                        (UInt32(avccData[offset + 2]) << 8) |
+                        UInt32(avccData[offset + 3])
+
+            // Skip the length prefix
+            offset += 4
+
+            // Check if we have enough data for this NAL unit
+            guard offset + Int(length) <= avccData.count else {
+                print("[VideoCodec] ⚠️ Invalid NAL unit length: \(length) at offset \(offset)")
+                break
+            }
+
+            // Add start code
+            annexBData.append(Data([0x00, 0x00, 0x00, 0x01]))
+
+            // Add NAL unit data
+            annexBData.append(avccData.subdata(in: offset..<(offset + Int(length))))
+
+            // Move to next NAL unit
+            offset += Int(length)
+        }
+
+        return annexBData
     }
 
     // MARK: - Adaptive Bitrate
