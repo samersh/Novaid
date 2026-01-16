@@ -194,9 +194,19 @@ class MultipeerService: NSObject, ObservableObject {
         let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
         guard let data = try? JSONEncoder().encode(message) else { return }
 
-        // Send unreliable for speed (UDP-style - WebRTC approach)
+        // CRITICAL: Use reliable mode for large frames (keyframes with SPS/PPS)
+        // MultipeerConnectivity's unreliable mode has ~4KB packet limit
+        // Frames larger than this get silently dropped!
+        let isLargeFrame = data.count > 10000  // 10KB threshold
+        let mode: MCSessionSendDataMode = isLargeFrame ? .reliable : .unreliable
+
+        if isLargeFrame {
+            print("[Multipeer] 📦 Sending LARGE frame (\(data.count) bytes) via RELIABLE mode")
+        }
+
+        // Send with appropriate mode
         do {
-            try session.send(data, toPeers: session.connectedPeers, with: .unreliable)
+            try session.send(data, toPeers: session.connectedPeers, with: mode)
             framesSent += 1
             totalFramesSent += 1
             totalBytesSent += Int64(data.count)
@@ -206,6 +216,7 @@ class MultipeerService: NSObject, ObservableObject {
             framesFailed += 1
             totalFramesFailed += 1
             adjustQualityIfNeeded()
+            print("[Multipeer] ❌ Failed to send frame (\(data.count) bytes): \(error)")
         }
     }
 
