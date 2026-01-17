@@ -61,12 +61,9 @@ struct ARCameraView: UIViewRepresentable {
     class Coordinator: NSObject, ARSessionDelegate {
         var arView: ARView?
         var annotationManager: ARAnnotationManager?
-        private var frameTimer: Timer?
         private var annotationAnchors: [String: AnchorEntity] = [:]
-        private let frameQueue = DispatchQueue(label: "com.novaid.arFrameQueue")
+        private let frameQueue = DispatchQueue(label: "com.novaid.arFrameQueue", qos: .userInteractive)
         private var isSessionReady = false
-        private var lastFrameTime: Date = Date()
-        private let minFrameInterval: TimeInterval = 1.0 / 30.0  // 30 FPS for smoother video
         private var detectedPlanes: [UUID: ARPlaneAnchor] = [:]
         private var currentOrientation = DeviceOrientation()
         var isVideoFrozen = false
@@ -85,13 +82,13 @@ struct ARCameraView: UIViewRepresentable {
             // Setup H.264 hardware encoder for WebRTC-style transmission
             setupH264Encoder()
 
-            frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-                self?.captureAndSendFrame()
-            }
+            // REMOVED: Timer-based frame capture (was causing frame drops)
+            // Instead, we now use ARSession's native frame callbacks in session(_ session: ARSession, didUpdate frame:)
 
             // Enable device orientation notifications
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             print("[AR] Device orientation tracking started")
+            print("[AR] ✅ Using ARSession native frame callbacks for 30 FPS capture")
         }
 
         private func setupH264Encoder() {
@@ -119,8 +116,7 @@ struct ARCameraView: UIViewRepresentable {
         }
 
         func freezeVideo() {
-            frameTimer?.invalidate()
-            frameTimer = nil
+            isVideoFrozen = true
 
             // Capture and send the current frozen frame
             if let lastFrame = lastCapturedFrame {
@@ -129,26 +125,22 @@ struct ARCameraView: UIViewRepresentable {
                     print("[AR] Sent frozen frame to iPad")
                 }
             }
-            print("[AR] Video frozen - stopped frame capture")
+            print("[AR] Video frozen - frame capture paused")
         }
 
         func resumeVideo() {
-            // Restart frame streaming
-            startFrameStreaming()
-            print("[AR] Video resumed - restarted frame capture")
+            isVideoFrozen = false
+            print("[AR] Video resumed - frame capture resumed")
         }
 
-        private func captureAndSendFrame() {
-            let now = Date()
-            guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
+        private func captureAndSendFrame(from frame: ARFrame) {
+            // Skip if video is frozen
+            guard !isVideoFrozen else { return }
 
-            guard let arView = arView,
-                  let currentFrame = arView.session.currentFrame else { return }
-
-            lastFrameTime = now
-
+            // ULTRA-LOW LATENCY: Process frames directly from ARSession callback
+            // No timer throttling - ARKit already provides frames at 30 FPS
             frameQueue.async { [weak self] in
-                self?.processAndSendFrame(currentFrame)
+                self?.processAndSendFrame(frame)
             }
         }
 
@@ -393,6 +385,10 @@ struct ARCameraView: UIViewRepresentable {
                 }
             }
 
+            // ULTRA-LOW LATENCY: Capture video frame directly from ARSession callback
+            // This gives us true 30 FPS synchronized with camera frames
+            captureAndSendFrame(from: frame)
+
             // Update screen positions for 2D overlay
             guard let manager = annotationManager, let arView = arView else { return }
 
@@ -444,8 +440,6 @@ struct ARCameraView: UIViewRepresentable {
         }
 
         func cleanup() {
-            frameTimer?.invalidate()
-            frameTimer = nil
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
             arView?.session.pause()
         }
