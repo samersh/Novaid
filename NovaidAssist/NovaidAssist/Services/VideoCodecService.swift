@@ -362,25 +362,12 @@ class VideoCodecService: NSObject {
                 print("[VideoCodec] 🔍 SPS status: \(spsStatus), size: \(spsSize), PPS status: \(ppsStatus), size: \(ppsSize)")
 
                 if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer, spsSize > 0, ppsSize > 0 {
-                    var spsData = Data(bytes: sps, count: spsSize)
-                    var ppsData = Data(bytes: pps, count: ppsSize)
-
-                    // FIX: CMVideoFormatDescriptionGetH264ParameterSetAtIndex gives us nal_ref_idc=1,
-                    // but CMVideoFormatDescriptionCreateFromH264ParameterSets expects nal_ref_idc=3
-                    // for parameter sets. Fix the NAL unit header byte.
-                    // SPS type 7: change 0x27 (00100111) to 0x67 (01100111)
-                    // PPS type 8: change 0x28 (00101000) to 0x68 (01101000)
-                    if spsData.count > 0 {
-                        let nalType = spsData[0] & 0x1F  // Extract NAL type (bits 3-7)
-                        spsData[0] = 0x60 | nalType  // Set nal_ref_idc=3 (bits 1-2 = 11)
-                    }
-                    if ppsData.count > 0 {
-                        let nalType = ppsData[0] & 0x1F  // Extract NAL type (bits 3-7)
-                        ppsData[0] = 0x60 | nalType  // Set nal_ref_idc=3 (bits 1-2 = 11)
-                    }
+                    // TEST: Try using original data WITHOUT modifying NAL header
+                    let spsData = Data(bytes: sps, count: spsSize)
+                    let ppsData = Data(bytes: pps, count: ppsSize)
 
                     print("[VideoCodec] 🎬 Extracted SPS(\(spsSize)B) + PPS(\(ppsSize)B) - sending separately!")
-                    print("[VideoCodec] 🔧 Fixed NAL headers: SPS=0x\(String(format: "%02X", spsData[0])), PPS=0x\(String(format: "%02X", ppsData[0]))")
+                    print("[VideoCodec] 🔧 Original NAL headers: SPS=0x\(String(format: "%02X", spsData[0])), PPS=0x\(String(format: "%02X", ppsData[0]))")
 
                     // Debug: Print complete SPS/PPS to compare with decoder
                     let spsHexEnc = spsData.map { String(format: "%02X", $0) }.joined(separator: " ")
@@ -531,25 +518,32 @@ class VideoCodecService: NSObject {
         print("[VideoCodec] 🔍 Expected: SPS should start with 0x67, PPS should start with 0x68")
 
         // Create format description from SPS/PPS
-        let parameterSets = [spsData, ppsData]
-        let parameterSetSizes = parameterSets.map { $0.count }
-
         var formatDescription: CMFormatDescription?
 
-        let status = parameterSets.withUnsafeBufferPointer { parameterSetsBuffer in
-            var parameterSetPointers = parameterSets.map { data in
-                data.withUnsafeBytes { $0.baseAddress!.assumingMemoryBound(to: UInt8.self) }
-            }
+        // Keep pointers in scope for the entire API call
+        let status = spsData.withUnsafeBytes { spsBytes in
+            ppsData.withUnsafeBytes { ppsBytes in
+                let spsPointer = spsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                let ppsPointer = ppsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
 
-            return parameterSetPointers.withUnsafeMutableBufferPointer { pointers in
-                CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                    allocator: kCFAllocatorDefault,
-                    parameterSetCount: 2,
-                    parameterSetPointers: pointers.baseAddress!,
-                    parameterSetSizes: parameterSetSizes,
-                    nalUnitHeaderLength: 4,
-                    formatDescriptionOut: &formatDescription
-                )
+                var pointers: [UnsafePointer<UInt8>?] = [spsPointer, ppsPointer]
+                let sizes = [spsData.count, ppsData.count]
+
+                print("[VideoCodec] 🔧 Calling CMVideoFormatDescriptionCreateFromH264ParameterSets...")
+                print("[VideoCodec] 🔧 parameterSetCount: 2")
+                print("[VideoCodec] 🔧 sizes: \(sizes)")
+                print("[VideoCodec] 🔧 nalUnitHeaderLength: 4")
+
+                return pointers.withUnsafeMutableBufferPointer { pointersBuffer in
+                    CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                        allocator: kCFAllocatorDefault,
+                        parameterSetCount: 2,
+                        parameterSetPointers: pointersBuffer.baseAddress!,
+                        parameterSetSizes: sizes,
+                        nalUnitHeaderLength: 4,
+                        formatDescriptionOut: &formatDescription
+                    )
+                }
             }
         }
 
