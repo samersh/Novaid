@@ -72,6 +72,10 @@ struct ARCameraView: UIViewRepresentable {
         var isVideoFrozen = false
         private var lastCapturedFrame: UIImage?
 
+        // LATENCY OPTIMIZATION: Throttle annotation position updates
+        private var lastAnnotationUpdateTime: Date = Date()
+        private let minAnnotationUpdateInterval: TimeInterval = 1.0 / 10.0  // 10 FPS for annotations (was 30 FPS)
+
         // H.264 encoder for WebRTC-style low-latency transmission (20-100x smaller than raw pixels)
         private let videoCodec = VideoCodecService.shared
         private var isEncoderSetup = false
@@ -392,6 +396,10 @@ struct ARCameraView: UIViewRepresentable {
             // Update screen positions for 2D overlay
             guard let manager = annotationManager, let arView = arView else { return }
 
+            // LATENCY OPTIMIZATION: Throttle annotation position updates to 10 FPS (was 30 FPS)
+            let now = Date()
+            let shouldSendUpdate = now.timeIntervalSince(lastAnnotationUpdateTime) >= minAnnotationUpdateInterval
+
             for (id, anchor) in annotationAnchors {
                 let worldPos = anchor.position(relativeTo: nil)
                 if let screenPoint = arView.project(worldPos) {
@@ -403,17 +411,23 @@ struct ARCameraView: UIViewRepresentable {
                     manager.updateScreenPosition(for: id, point: normalized)
                     manager.setVisibility(for: id, visible: isOnScreen)
 
-                    // Send position update to iPad for AR tracking
-                    Task { @MainActor in
-                        MultipeerService.shared.sendAnnotationPositionUpdate(
-                            id: id,
-                            normalizedX: normalized.x,
-                            normalizedY: normalized.y
-                        )
+                    // Send position update to iPad for AR tracking (throttled to 10 FPS)
+                    if shouldSendUpdate {
+                        Task { @MainActor in
+                            MultipeerService.shared.sendAnnotationPositionUpdate(
+                                id: id,
+                                normalizedX: normalized.x,
+                                normalizedY: normalized.y
+                            )
+                        }
                     }
                 } else {
                     manager.setVisibility(for: id, visible: false)
                 }
+            }
+
+            if shouldSendUpdate {
+                lastAnnotationUpdateTime = now
             }
         }
 

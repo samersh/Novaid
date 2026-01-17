@@ -27,10 +27,10 @@ class VideoCodecService: NSObject {
     private let targetHeight: Int32 = 1280
     private let targetFrameRate: Int32 = 30
 
-    // Adaptive bitrate: Start at 2.5 Mbps, adjust based on network
-    private var currentBitrate: Int = 2_500_000 // 2.5 Mbps
+    // ULTRA-LOW LATENCY: Lower bitrate for faster encoding and lower bandwidth
+    private var currentBitrate: Int = 1_500_000 // 1.5 Mbps (reduced from 2.5 Mbps)
     private let minBitrate: Int = 500_000       // 500 Kbps
-    private let maxBitrate: Int = 4_000_000     // 4 Mbps
+    private let maxBitrate: Int = 2_000_000     // 2 Mbps (reduced from 4 Mbps)
 
     // Network monitoring
     private var packetsLost: Int = 0
@@ -687,6 +687,17 @@ class VideoCodecService: NSObject {
 
     /// Decode H.264 data to pixel buffer
     func decode(data: Data) {
+        // ULTRA-LOW LATENCY: Skip SEI (Supplemental Enhancement Information) frames
+        // SEI frames (type 6) are metadata and not needed for display
+        if data.count >= 5 {
+            // Check first NAL unit type (AVCC format: 4 bytes length + NAL header)
+            let nalType = data[4] & 0x1F
+            if nalType == 6 {
+                // Skip SEI frame to reduce processing overhead
+                return
+            }
+        }
+
         // CRITICAL: DON'T drop frames until decoder is initialized!
         // We need to find the keyframe with SPS/PPS first
         if decodingSession != nil {
@@ -694,7 +705,6 @@ class VideoCodecService: NSObject {
             if pendingDecodingFrames >= maxPendingFrames {
                 droppedDecodeFrames += 1
                 logDecodeDropIfNeeded()
-                print("[VideoCodec] ⚠️ Dropping frame - \(pendingDecodingFrames) pending")
                 return
             }
         } else {
