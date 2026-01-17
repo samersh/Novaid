@@ -329,16 +329,8 @@ class VideoCodecService: NSObject {
 
         // On first keyframe, extract and send SPS/PPS separately (out-of-band)
         // This is proper H.264 streaming: format description sent once, not with every keyframe!
-        if isKeyFrame {
-            print("[VideoCodec] 🔍 Keyframe detected, hasSentSPSPPS = \(service.hasSentSPSPPS)")
-        }
-
         if isKeyFrame && !service.hasSentSPSPPS {
-            print("[VideoCodec] 🔍 First keyframe detected, extracting SPS/PPS...")
-
             if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
-                print("[VideoCodec] 🔍 Got format description, extracting parameter sets...")
-
                 var spsSize: Int = 0
                 var spsCount: Int = 0
                 var spsPointer: UnsafePointer<UInt8>?
@@ -359,38 +351,19 @@ class VideoCodecService: NSObject {
                     parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount, nalUnitHeaderLengthOut: nil
                 )
 
-                print("[VideoCodec] 🔍 SPS status: \(spsStatus), size: \(spsSize), PPS status: \(ppsStatus), size: \(ppsSize)")
-
                 if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer, spsSize > 0, ppsSize > 0 {
-                    // TEST: Try using original data WITHOUT modifying NAL header
                     let spsData = Data(bytes: sps, count: spsSize)
                     let ppsData = Data(bytes: pps, count: ppsSize)
 
                     print("[VideoCodec] 🎬 Extracted SPS(\(spsSize)B) + PPS(\(ppsSize)B) - sending separately!")
-                    print("[VideoCodec] 🔧 Original NAL headers: SPS=0x\(String(format: "%02X", spsData[0])), PPS=0x\(String(format: "%02X", ppsData[0]))")
-
-                    // Debug: Print complete SPS/PPS to compare with decoder
-                    let spsHexEnc = spsData.map { String(format: "%02X", $0) }.joined(separator: " ")
-                    let ppsHexEnc = ppsData.map { String(format: "%02X", $0) }.joined(separator: " ")
-                    print("[VideoCodec] 📤 SENDING SPS: \(spsHexEnc)")
-                    print("[VideoCodec] 📤 SENDING PPS: \(ppsHexEnc)")
-
                     service.hasSentSPSPPS = true
 
                     // Send SPS/PPS separately via callback
                     Task { @MainActor in
                         service.onSPSPPSExtracted?(spsData, ppsData)
                     }
-                } else {
-                    print("[VideoCodec] ❌ Failed to extract SPS/PPS - spsStatus: \(spsStatus), ppsStatus: \(ppsStatus)")
                 }
-            } else {
-                print("[VideoCodec] ❌ No format description available")
             }
-        }
-
-        if isKeyFrame {
-            print("[VideoCodec] 🔑 KEYFRAME: \(data.count) bytes (SPS/PPS sent separately)")
         }
 
         // Send frame data WITHOUT SPS/PPS prepended
@@ -508,14 +481,7 @@ class VideoCodecService: NSObject {
     /// Initialize H.264 hardware decoder from SPS/PPS (proper H.264 streaming)
     /// This is the correct way to initialize: receive format description out-of-band
     func setupDecoderFromSPSPPS(spsData: Data, ppsData: Data) -> Bool {
-        print("[VideoCodec] 🎬 Creating decoder from SPS(\(spsData.count)B) + PPS(\(ppsData.count)B)")
-
-        // Debug: Print ALL bytes to verify data integrity
-        let spsHex = spsData.map { String(format: "%02X", $0) }.joined(separator: " ")
-        let ppsHex = ppsData.map { String(format: "%02X", $0) }.joined(separator: " ")
-        print("[VideoCodec] 🔍 COMPLETE SPS: \(spsHex)")
-        print("[VideoCodec] 🔍 COMPLETE PPS: \(ppsHex)")
-        print("[VideoCodec] 🔍 Expected: SPS should start with 0x67, PPS should start with 0x68")
+        print("[VideoCodec] 🎬 Initializing decoder from SPS(\(spsData.count)B) + PPS(\(ppsData.count)B)")
 
         // Create format description from SPS/PPS
         var formatDescription: CMFormatDescription?
@@ -530,11 +496,6 @@ class VideoCodecService: NSObject {
 
                 var pointers = [spsPointer, ppsPointer]
                 var sizes = [spsData.count, ppsData.count]
-
-                print("[VideoCodec] 🔧 Calling CMVideoFormatDescriptionCreateFromH264ParameterSets...")
-                print("[VideoCodec] 🔧 parameterSetCount: 2")
-                print("[VideoCodec] 🔧 sizes: \(sizes)")
-                print("[VideoCodec] 🔧 nalUnitHeaderLength: 4")
 
                 return pointers.withUnsafeMutableBufferPointer { pointersBuffer in
                     sizes.withUnsafeMutableBufferPointer { sizesBuffer in
@@ -556,7 +517,7 @@ class VideoCodecService: NSObject {
             return false
         }
 
-        print("[VideoCodec] ✅ Created format description from SPS/PPS")
+        print("[VideoCodec] ✅ Decoder format description created")
 
         // Now setup the decoder with this format description
         return setupDecoder(formatDescription: formatDesc)
