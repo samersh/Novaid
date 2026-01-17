@@ -102,8 +102,10 @@ struct ARCameraView: UIViewRepresentable {
 
                 // Setup callback for SPS/PPS extraction (sent once at stream start)
                 videoCodec.onSPSPPSExtracted = { [weak self] spsData, ppsData in
+                    print("[AR] 🎬 onSPSPPSExtracted callback triggered!")
                     self?.sendSPSPPS(spsData: spsData, ppsData: ppsData)
                 }
+                print("[AR] ✅ SPS/PPS callback registered")
 
                 // Setup callback for encoded frames
                 videoCodec.onEncodedFrame = { [weak self] h264Data, presentationTime in
@@ -186,8 +188,11 @@ struct ARCameraView: UIViewRepresentable {
         }
 
         private func sendSPSPPS(spsData: Data, ppsData: Data) {
+            print("[AR] 📥 Received SPS/PPS callback, sending to MultipeerService...")
             Task { @MainActor in
+                print("[AR] 📤 Calling MultipeerService.sendSPSPPS...")
                 MultipeerService.shared.sendSPSPPS(spsData: spsData, ppsData: ppsData)
+                print("[AR] ✅ MultipeerService.sendSPSPPS completed")
             }
         }
 

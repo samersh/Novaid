@@ -185,7 +185,12 @@ class MultipeerService: NSObject, ObservableObject {
     /// Send SPS/PPS parameter sets (sent once at stream start, out-of-band)
     /// This is proper H.264 streaming: format description sent separately from frames
     func sendSPSPPS(spsData: Data, ppsData: Data) {
-        guard isConnected, !session.connectedPeers.isEmpty else { return }
+        print("[Multipeer] 🔍 sendSPSPPS called - isConnected: \(isConnected), peers: \(session.connectedPeers.count)")
+
+        guard isConnected, !session.connectedPeers.isEmpty else {
+            print("[Multipeer] ❌ Cannot send SPS/PPS - not connected!")
+            return
+        }
 
         // Encode SPS/PPS into a single payload
         struct SPSPPSPayload: Codable {
