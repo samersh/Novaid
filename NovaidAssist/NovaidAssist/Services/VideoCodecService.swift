@@ -690,18 +690,6 @@ class VideoCodecService: NSObject {
 
     /// Decode H.264 data to pixel buffer
     func decode(data: Data) {
-        // ULTRA-LOW LATENCY: Skip SEI (Supplemental Enhancement Information) frames
-        // SEI frames (type 6) are metadata and not needed for display
-        if data.count >= 5 {
-            // Check first NAL unit type (AVCC format: 4 bytes length + NAL header)
-            let nalType = data[4] & 0x1F
-            if nalType == 6 {
-                // Skip SEI frame to reduce processing overhead
-                print("[VideoCodec] 🔍 Skipping SEI metadata frame")
-                return
-            }
-        }
-
         // CRITICAL: DON'T drop frames until decoder is initialized!
         // We need to find the keyframe with SPS/PPS first
         if decodingSession != nil {
