@@ -381,6 +381,13 @@ class VideoCodecService: NSObject {
 
                     print("[VideoCodec] 🎬 Extracted SPS(\(spsSize)B) + PPS(\(ppsSize)B) - sending separately!")
                     print("[VideoCodec] 🔧 Fixed NAL headers: SPS=0x\(String(format: "%02X", spsData[0])), PPS=0x\(String(format: "%02X", ppsData[0]))")
+
+                    // Debug: Print complete SPS/PPS to compare with decoder
+                    let spsHexEnc = spsData.map { String(format: "%02X", $0) }.joined(separator: " ")
+                    let ppsHexEnc = ppsData.map { String(format: "%02X", $0) }.joined(separator: " ")
+                    print("[VideoCodec] 📤 SENDING SPS: \(spsHexEnc)")
+                    print("[VideoCodec] 📤 SENDING PPS: \(ppsHexEnc)")
+
                     service.hasSentSPSPPS = true
 
                     // Send SPS/PPS separately via callback
@@ -516,11 +523,11 @@ class VideoCodecService: NSObject {
     func setupDecoderFromSPSPPS(spsData: Data, ppsData: Data) -> Bool {
         print("[VideoCodec] 🎬 Creating decoder from SPS(\(spsData.count)B) + PPS(\(ppsData.count)B)")
 
-        // Debug: Print first few bytes to verify NAL unit type
-        let spsHex = spsData.prefix(min(5, spsData.count)).map { String(format: "%02X", $0) }.joined(separator: " ")
-        let ppsHex = ppsData.prefix(min(5, ppsData.count)).map { String(format: "%02X", $0) }.joined(separator: " ")
-        print("[VideoCodec] 🔍 SPS first bytes: \(spsHex)")
-        print("[VideoCodec] 🔍 PPS first bytes: \(ppsHex)")
+        // Debug: Print ALL bytes to verify data integrity
+        let spsHex = spsData.map { String(format: "%02X", $0) }.joined(separator: " ")
+        let ppsHex = ppsData.map { String(format: "%02X", $0) }.joined(separator: " ")
+        print("[VideoCodec] 🔍 COMPLETE SPS: \(spsHex)")
+        print("[VideoCodec] 🔍 COMPLETE PPS: \(ppsHex)")
         print("[VideoCodec] 🔍 Expected: SPS should start with 0x67, PPS should start with 0x68")
 
         // Create format description from SPS/PPS
