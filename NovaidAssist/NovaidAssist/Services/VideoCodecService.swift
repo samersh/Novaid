@@ -362,10 +362,25 @@ class VideoCodecService: NSObject {
                 print("[VideoCodec] 🔍 SPS status: \(spsStatus), size: \(spsSize), PPS status: \(ppsStatus), size: \(ppsSize)")
 
                 if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer, spsSize > 0, ppsSize > 0 {
-                    let spsData = Data(bytes: sps, count: spsSize)
-                    let ppsData = Data(bytes: pps, count: ppsSize)
+                    var spsData = Data(bytes: sps, count: spsSize)
+                    var ppsData = Data(bytes: pps, count: ppsSize)
+
+                    // FIX: CMVideoFormatDescriptionGetH264ParameterSetAtIndex gives us nal_ref_idc=1,
+                    // but CMVideoFormatDescriptionCreateFromH264ParameterSets expects nal_ref_idc=3
+                    // for parameter sets. Fix the NAL unit header byte.
+                    // SPS type 7: change 0x27 (00100111) to 0x67 (01100111)
+                    // PPS type 8: change 0x28 (00101000) to 0x68 (01101000)
+                    if spsData.count > 0 {
+                        let nalType = spsData[0] & 0x1F  // Extract NAL type (bits 3-7)
+                        spsData[0] = 0x60 | nalType  // Set nal_ref_idc=3 (bits 1-2 = 11)
+                    }
+                    if ppsData.count > 0 {
+                        let nalType = ppsData[0] & 0x1F  // Extract NAL type (bits 3-7)
+                        ppsData[0] = 0x60 | nalType  // Set nal_ref_idc=3 (bits 1-2 = 11)
+                    }
 
                     print("[VideoCodec] 🎬 Extracted SPS(\(spsSize)B) + PPS(\(ppsSize)B) - sending separately!")
+                    print("[VideoCodec] 🔧 Fixed NAL headers: SPS=0x\(String(format: "%02X", spsData[0])), PPS=0x\(String(format: "%02X", ppsData[0]))")
                     service.hasSentSPSPPS = true
 
                     // Send SPS/PPS separately via callback
