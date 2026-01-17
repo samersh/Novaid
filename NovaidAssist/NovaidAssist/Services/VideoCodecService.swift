@@ -501,6 +501,13 @@ class VideoCodecService: NSObject {
     func setupDecoderFromSPSPPS(spsData: Data, ppsData: Data) -> Bool {
         print("[VideoCodec] 🎬 Creating decoder from SPS(\(spsData.count)B) + PPS(\(ppsData.count)B)")
 
+        // Debug: Print first few bytes to verify NAL unit type
+        let spsHex = spsData.prefix(min(5, spsData.count)).map { String(format: "%02X", $0) }.joined(separator: " ")
+        let ppsHex = ppsData.prefix(min(5, ppsData.count)).map { String(format: "%02X", $0) }.joined(separator: " ")
+        print("[VideoCodec] 🔍 SPS first bytes: \(spsHex)")
+        print("[VideoCodec] 🔍 PPS first bytes: \(ppsHex)")
+        print("[VideoCodec] 🔍 Expected: SPS should start with 0x67, PPS should start with 0x68")
+
         // Create format description from SPS/PPS
         let parameterSets = [spsData, ppsData]
         let parameterSetSizes = parameterSets.map { $0.count }
