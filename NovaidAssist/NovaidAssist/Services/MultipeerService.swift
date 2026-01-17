@@ -219,11 +219,6 @@ class MultipeerService: NSObject, ObservableObject {
     /// Send H.264 compressed frame (WebRTC-style, 20-100x smaller than raw pixels)
     /// This is the FASTEST method - industry standard for real-time video
     func sendH264Data(_ h264Data: Data) {
-        // Rate limit to prevent flooding
-        let now = Date()
-        guard now.timeIntervalSince(lastFrameTime) >= minFrameInterval else { return }
-        lastFrameTime = now
-
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
         // For large frames, send RAW data with simple prefix to avoid JSON encoding overhead
@@ -245,10 +240,11 @@ class MultipeerService: NSObject, ObservableObject {
             dataToSend = encodedData
         }
 
-        // Use reliable mode for large frames, unreliable for small
-        let mode: MCSessionSendDataMode = isLargeFrame ? .reliable : .unreliable
+        // ULTRA-LOW LATENCY: Use unreliable mode for ALL frames (UDP-style, no retransmissions)
+        // Frames are small enough now (~10-30KB) and video can tolerate occasional drops
+        let mode: MCSessionSendDataMode = .unreliable
 
-        // Send with appropriate mode
+        // Send with unreliable mode for lowest latency
         do {
             try session.send(dataToSend, toPeers: session.connectedPeers, with: mode)
             framesSent += 1

@@ -53,7 +53,7 @@ class VideoCodecService: NSObject {
     // MARK: - Frame Dropping Strategy (prevents queue buildup)
     private var pendingEncodingFrames = 0
     private var pendingDecodingFrames = 0
-    private let maxPendingFrames = 2  // Drop frames if more than 2 are pending
+    private let maxPendingFrames = 5  // Increase threshold to process more frames (lower latency)
     private var droppedEncodeFrames = 0
     private var droppedDecodeFrames = 0
     private var lastEncodeDropLog: Date = Date()
@@ -203,13 +203,6 @@ class VideoCodecService: NSObject {
         guard let session = encodingSession else {
             print("[VideoCodec] ⚠️ No encoding session")
             return
-        }
-
-        // FRAME DROPPING: Check if encoder is overwhelmed
-        if pendingEncodingFrames >= maxPendingFrames {
-            droppedEncodeFrames += 1
-            logEncodeDropIfNeeded()
-            return  // Drop this frame to prevent queue buildup
         }
 
         // LATENCY TRACKING: Record capture timestamp
@@ -575,11 +568,11 @@ class VideoCodecService: NSObject {
             value: kCFBooleanTrue
         )
 
-        // ULTRA-LOW LATENCY: Use single thread for lowest latency
+        // ULTRA-LOW LATENCY: Use 2 threads for parallel decoding (faster on modern hardware)
         VTSessionSetProperty(
             session,
             key: kVTDecompressionPropertyKey_ThreadCount,
-            value: 1 as CFNumber
+            value: 2 as CFNumber
         )
 
         decodingSession = session
