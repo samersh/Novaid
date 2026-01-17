@@ -521,13 +521,15 @@ class VideoCodecService: NSObject {
         var formatDescription: CMFormatDescription?
 
         // Keep pointers in scope for the entire API call
-        let status = spsData.withUnsafeBytes { spsBytes in
-            ppsData.withUnsafeBytes { ppsBytes in
-                let spsPointer = spsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
-                let ppsPointer = ppsBytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
+        let status = spsData.withUnsafeBytes { spsBytes -> OSStatus in
+            return ppsData.withUnsafeBytes { ppsBytes -> OSStatus in
+                guard let spsPointer = spsBytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                      let ppsPointer = ppsBytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                    return -50  // paramErr
+                }
 
-                var pointers: [UnsafePointer<UInt8>?] = [spsPointer, ppsPointer]
-                let sizes = [spsData.count, ppsData.count]
+                var pointers = [spsPointer, ppsPointer]
+                var sizes = [spsData.count, ppsData.count]
 
                 print("[VideoCodec] 🔧 Calling CMVideoFormatDescriptionCreateFromH264ParameterSets...")
                 print("[VideoCodec] 🔧 parameterSetCount: 2")
@@ -535,14 +537,16 @@ class VideoCodecService: NSObject {
                 print("[VideoCodec] 🔧 nalUnitHeaderLength: 4")
 
                 return pointers.withUnsafeMutableBufferPointer { pointersBuffer in
-                    CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                        allocator: kCFAllocatorDefault,
-                        parameterSetCount: 2,
-                        parameterSetPointers: pointersBuffer.baseAddress!,
-                        parameterSetSizes: sizes,
-                        nalUnitHeaderLength: 4,
-                        formatDescriptionOut: &formatDescription
-                    )
+                    sizes.withUnsafeMutableBufferPointer { sizesBuffer in
+                        CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                            allocator: kCFAllocatorDefault,
+                            parameterSetCount: 2,
+                            parameterSetPointers: UnsafePointer(pointersBuffer.baseAddress!),
+                            parameterSetSizes: sizesBuffer.baseAddress!,
+                            nalUnitHeaderLength: 4,
+                            formatDescriptionOut: &formatDescription
+                        )
+                    }
                 }
             }
         }
