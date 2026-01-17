@@ -330,7 +330,11 @@ class VideoCodecService: NSObject {
         // On first keyframe, extract and send SPS/PPS separately (out-of-band)
         // This is proper H.264 streaming: format description sent once, not with every keyframe!
         if isKeyFrame && !service.hasSentSPSPPS {
+            print("[VideoCodec] 🔍 First keyframe detected, extracting SPS/PPS...")
+
             if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                print("[VideoCodec] 🔍 Got format description, extracting parameter sets...")
+
                 var spsSize: Int = 0
                 var spsCount: Int = 0
                 var spsPointer: UnsafePointer<UInt8>?
@@ -351,6 +355,8 @@ class VideoCodecService: NSObject {
                     parameterSetSizeOut: &ppsSize, parameterSetCountOut: &ppsCount, nalUnitHeaderLengthOut: nil
                 )
 
+                print("[VideoCodec] 🔍 SPS status: \(spsStatus), size: \(spsSize), PPS status: \(ppsStatus), size: \(ppsSize)")
+
                 if spsStatus == noErr, ppsStatus == noErr, let sps = spsPointer, let pps = ppsPointer, spsSize > 0, ppsSize > 0 {
                     let spsData = Data(bytes: sps, count: spsSize)
                     let ppsData = Data(bytes: pps, count: ppsSize)
@@ -362,7 +368,11 @@ class VideoCodecService: NSObject {
                     Task { @MainActor in
                         service.onSPSPPSExtracted?(spsData, ppsData)
                     }
+                } else {
+                    print("[VideoCodec] ❌ Failed to extract SPS/PPS - spsStatus: \(spsStatus), ppsStatus: \(ppsStatus)")
                 }
+            } else {
+                print("[VideoCodec] ❌ No format description available")
             }
         }
 
