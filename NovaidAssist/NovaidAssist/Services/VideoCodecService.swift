@@ -329,6 +329,10 @@ class VideoCodecService: NSObject {
 
         // On first keyframe, extract and send SPS/PPS separately (out-of-band)
         // This is proper H.264 streaming: format description sent once, not with every keyframe!
+        if isKeyFrame {
+            print("[VideoCodec] 🔍 Keyframe detected, hasSentSPSPPS = \(service.hasSentSPSPPS)")
+        }
+
         if isKeyFrame && !service.hasSentSPSPPS {
             print("[VideoCodec] 🔍 First keyframe detected, extracting SPS/PPS...")
 
