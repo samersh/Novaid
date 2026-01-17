@@ -240,11 +240,11 @@ class MultipeerService: NSObject, ObservableObject {
             dataToSend = encodedData
         }
 
-        // ULTRA-LOW LATENCY: Use unreliable mode for ALL frames (UDP-style, no retransmissions)
-        // Frames are small enough now (~10-30KB) and video can tolerate occasional drops
-        let mode: MCSessionSendDataMode = .unreliable
+        // LATENCY OPTIMIZATION: Use reliable for large frames (ensure delivery), unreliable for small
+        // Large frames need reliable mode to ensure they arrive
+        let mode: MCSessionSendDataMode = isLargeFrame ? .reliable : .unreliable
 
-        // Send with unreliable mode for lowest latency
+        // Send with appropriate mode
         do {
             try session.send(dataToSend, toPeers: session.connectedPeers, with: mode)
             framesSent += 1

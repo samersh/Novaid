@@ -73,6 +73,9 @@ class VideoCodecService: NSObject {
     func setupEncoder(width: Int32, height: Int32) -> Bool {
         print("[VideoCodec] Setting up H.264 hardware encoder: \(width)x\(height) @ \(targetFrameRate)fps")
 
+        // CRITICAL: Reset SPS/PPS flag when setting up new encoder
+        hasSentSPSPPS = false
+
         // Clean up existing session
         if let session = encodingSession {
             VTCompressionSessionInvalidate(session)
@@ -694,6 +697,7 @@ class VideoCodecService: NSObject {
             let nalType = data[4] & 0x1F
             if nalType == 6 {
                 // Skip SEI frame to reduce processing overhead
+                print("[VideoCodec] 🔍 Skipping SEI metadata frame")
                 return
             }
         }
