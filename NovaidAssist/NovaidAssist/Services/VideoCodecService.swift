@@ -25,7 +25,7 @@ class VideoCodecService: NSObject {
     // Industry standard: 720p at 30fps for remote assistance
     private let targetWidth: Int32 = 720
     private let targetHeight: Int32 = 1280
-    private let targetFrameRate: Int32 = 30
+    private let targetFrameRate: Int32 = 20  // Reduced from 30 for lower latency
 
     // QUALITY vs LATENCY BALANCE: Higher bitrate for better quality, optimized for low latency
     private var currentBitrate: Int = 3_500_000 // 3.5 Mbps - good quality for 720p
@@ -53,7 +53,7 @@ class VideoCodecService: NSObject {
     // MARK: - Frame Dropping Strategy (prevents queue buildup)
     private var pendingEncodingFrames = 0
     private var pendingDecodingFrames = 0
-    private let maxPendingFrames = 5  // Increase threshold to process more frames (lower latency)
+    private let maxPendingFrames = 1  // ULTRA-LOW LATENCY: Only 1 pending frame allowed (aggressive dropping)
     private var droppedEncodeFrames = 0
     private var droppedDecodeFrames = 0
     private var lastEncodeDropLog: Date = Date()
@@ -161,11 +161,11 @@ class VideoCodecService: NSObject {
             value: frameDuration as CFTypeRef
         )
 
-        // ULTRA-LOW LATENCY: Keyframe every 1 second (reduced from 2 seconds)
+        // ULTRA-LOW LATENCY: Keyframe every 0.5 seconds for faster sync
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
-            value: targetFrameRate as CFNumber  // 30 frames = 1 second
+            value: (targetFrameRate / 2) as CFNumber  // 10 frames at 20 FPS = 0.5 seconds
         )
 
         // CRITICAL: Disable frame reordering (no B-frames) for lowest latency
@@ -790,9 +790,9 @@ class VideoCodecService: NSObject {
             var sampleBuffer: CMSampleBuffer?
 
             // Create timing info
-            let presentationTime = CMTime(value: self.frameCounter, timescale: 30)
+            let presentationTime = CMTime(value: self.frameCounter, timescale: self.targetFrameRate)
             var timingInfo = CMSampleTimingInfo(
-                duration: CMTime(value: 1, timescale: 30),
+                duration: CMTime(value: 1, timescale: self.targetFrameRate),
                 presentationTimeStamp: presentationTime,
                 decodeTimeStamp: .invalid
             )

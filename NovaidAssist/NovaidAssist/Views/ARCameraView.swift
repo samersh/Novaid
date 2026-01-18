@@ -81,7 +81,7 @@ struct ARCameraView: UIViewRepresentable {
         // ADAPTIVE STREAMING: QoS monitoring and mode switching (Chalk-style)
         private let qosMonitor = NetworkQoSMonitor()
         private var currentStreamingMode: NetworkQoSMonitor.StreamingMode = .normal
-        private var targetFPS: Int = 30
+        private var targetFPS: Int = 20  // Reduced from 30 for lower latency
         private var lastFrameCaptureTime: Date = Date()
         private var frameCaptureInterval: TimeInterval = 0  // 0 = capture every frame
 
@@ -249,7 +249,7 @@ struct ARCameraView: UIViewRepresentable {
                 // This ensures each frame can be decoded independently
                 let forceKeyframe = currentStreamingMode == .freezeFrame
 
-                let presentationTime = CMTime(seconds: Double(frameNumber) / 30.0, preferredTimescale: 600)
+                let presentationTime = CMTime(seconds: Double(frameNumber) / Double(targetFPS), preferredTimescale: 600)
                 videoCodec.encode(
                     pixelBuffer: pixelBuffer,
                     presentationTime: presentationTime,

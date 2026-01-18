@@ -13,10 +13,10 @@ class NetworkQoSMonitor {
 
         var targetFPS: Int {
             switch self {
-            case .normal: return 30
-            case .lowBandwidth: return 15
-            case .freezeFrame: return 1  // 1 keyframe per second
-            case .audioOnly: return 0    // No video
+            case .normal: return 20          // Reduced from 30 for lower latency
+            case .lowBandwidth: return 10    // Reduced from 15 for lower latency
+            case .freezeFrame: return 1      // 1 keyframe per second
+            case .audioOnly: return 0        // No video
             }
         }
 
