@@ -25,6 +25,10 @@ class MetalVideoRenderer: UIView {
     // Aspect ratio handling (.fit mode to show full frame)
     private var videoAspectRatio: CGFloat = 9.0 / 16.0 // Default portrait
 
+    // MARK: - Jitter Buffer (WebRTC-style smooth playout)
+    private let jitterBuffer = JitterBuffer()
+    private var playoutTimer: Timer?
+
     // MARK: - Performance Tracking
     private var frameCount: Int = 0
     private var lastFPSLog: Date = Date()
@@ -135,22 +139,51 @@ class MetalVideoRenderer: UIView {
         }
     }
 
-    // MARK: - Display Link (VSync Synchronization)
+    // MARK: - Frame Playout Timer (Immediate Rendering, No VSync)
     private func setupDisplayLink() {
-        displayLink = CADisplayLink(target: self, selector: #selector(displayLinkCallback))
-        displayLink?.preferredFramesPerSecond = 60 // Match display refresh rate
-        displayLink?.add(to: .main, forMode: .common)
-        print("[Metal] ✅ CADisplayLink setup for VSync synchronization")
+        // ULTRA-LOW LATENCY: Poll jitter buffer every 16ms (faster than 60 FPS VSync)
+        // This allows immediate rendering when frames are ready, no VSync wait
+        playoutTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+            self?.pullAndRenderFrame()
+        }
+        print("[Metal] ✅ Playout timer setup for immediate rendering (no VSync wait)")
+    }
+
+    private func pullAndRenderFrame() {
+        // Pull next frame from jitter buffer
+        if let pixelBuffer = jitterBuffer.getNextFrame() {
+            renderQueue.async { [weak self] in
+                self?.currentPixelBuffer = pixelBuffer
+                self?.renderFrameDirect()
+            }
+        }
     }
 
     @objc private func displayLinkCallback() {
-        // Render on display refresh (vsync synchronized)
-        renderFrame()
+        // Legacy method - no longer used
     }
 
     // MARK: - Public API
 
+    /// Add frame to jitter buffer (WebRTC-style buffering for smooth playout)
+    func addFrameToJitterBuffer(_ pixelBuffer: CVPixelBuffer, metadata: FrameMetadata) {
+        let captureDate = metadata.getCaptureDate()
+        jitterBuffer.addFrame(
+            pixelBuffer: pixelBuffer,
+            captureTimestamp: captureDate,
+            sequenceNumber: metadata.sequenceNumber
+        )
+
+        // Update aspect ratio based on pixel buffer dimensions
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        DispatchQueue.main.async { [weak self] in
+            self?.videoAspectRatio = CGFloat(width) / CGFloat(height)
+        }
+    }
+
     /// Update with new pixel buffer (zero-copy via IOSurface)
+    /// DEPRECATED: Use addFrameToJitterBuffer for WebRTC-style buffering
     func updatePixelBuffer(_ pixelBuffer: CVPixelBuffer) {
         renderQueue.async { [weak self] in
             guard let self = self else { return }
@@ -175,6 +208,15 @@ class MetalVideoRenderer: UIView {
 
     // MARK: - Rendering
 
+    /// Immediate rendering without async wrapper (called from renderQueue.async)
+    private func renderFrameDirect() {
+        guard let pixelBuffer = self.currentPixelBuffer else {
+            // No frame to render yet
+            return
+        }
+        self.renderFrameInternal(pixelBuffer: pixelBuffer)
+    }
+
     private func renderFrame() {
         renderQueue.async { [weak self] in
             guard let self = self else { return }
@@ -183,29 +225,33 @@ class MetalVideoRenderer: UIView {
                 // No frame to render yet
                 return
             }
-
-            // Get drawable from Metal layer
-            guard let drawable = self.metalLayer.nextDrawable() else {
-                print("[Metal] ⚠️ Failed to get next drawable")
-                return
-            }
-
-            // Check pixel format and render accordingly
-            let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
-
-            if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
-               pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
-                // YUV bi-planar (NV12) - ARKit native format
-                self.renderYUV(pixelBuffer: pixelBuffer, to: drawable)
-            } else {
-                // BGRA or other format - fallback
-                self.renderBGRA(pixelBuffer: pixelBuffer, to: drawable)
-            }
-
-            // Track FPS
-            self.frameCount += 1
-            self.logFPSIfNeeded()
+            self.renderFrameInternal(pixelBuffer: pixelBuffer)
         }
+    }
+
+    /// Internal rendering logic (shared by direct and async paths)
+    private func renderFrameInternal(pixelBuffer: CVPixelBuffer) {
+        // Get drawable from Metal layer
+        guard let drawable = self.metalLayer.nextDrawable() else {
+            print("[Metal] ⚠️ Failed to get next drawable")
+            return
+        }
+
+        // Check pixel format and render accordingly
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+
+        if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+           pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
+            // YUV bi-planar (NV12) - ARKit native format
+            self.renderYUV(pixelBuffer: pixelBuffer, to: drawable)
+        } else {
+            // BGRA or other format - fallback
+            self.renderBGRA(pixelBuffer: pixelBuffer, to: drawable)
+        }
+
+        // Track FPS
+        self.frameCount += 1
+        self.logFPSIfNeeded()
     }
 
     /// Render YUV bi-planar pixel buffer (fixes blue color issue)
@@ -405,13 +451,13 @@ struct MetalVideoView: UIViewRepresentable {
         }
 
         // PRIMARY: H.264 compressed frames (WebRTC-style - 20-100x smaller, <200ms latency)
-        multipeerService.onH264DataReceived = { h264Data in
-            videoCodec.decode(data: h264Data)
+        multipeerService.onH264DataReceived = { h264Data, metadata in
+            videoCodec.decode(data: h264Data, metadata: metadata)
         }
 
-        // Connect decoder output to renderer
-        videoCodec.onDecodedFrame = { pixelBuffer in
-            renderer.updatePixelBuffer(pixelBuffer)
+        // Connect decoder output to jitter buffer
+        videoCodec.onDecodedFrame = { pixelBuffer, metadata in
+            renderer.addFrameToJitterBuffer(pixelBuffer, metadata: metadata)
         }
 
         // FALLBACK: Direct CVPixelBuffer transmission (for backwards compatibility)

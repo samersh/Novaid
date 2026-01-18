@@ -40,7 +40,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
     var onPixelBufferReceived: ((CVPixelBuffer) -> Void)?  // New: for direct pixel buffer transmission
-    var onH264DataReceived: ((Data) -> Void)?  // H.264 compressed frames (WebRTC-style, 20-100x smaller)
+    var onH264DataReceived: ((Data, FrameMetadata) -> Void)?  // H.264 compressed frames with metadata for jitter buffer
     var onSPSPPSReceived: ((Data, Data) -> Void)?  // SPS/PPS parameter sets (sent once at stream start)
     var onFrozenFrameReceived: ((UIImage) -> Void)?
     var onAudioDataReceived: ((Data) -> Void)?
@@ -230,33 +230,25 @@ class MultipeerService: NSObject, ObservableObject {
 
     /// Send H.264 compressed frame (WebRTC-style, 20-100x smaller than raw pixels)
     /// This is the FASTEST method - industry standard for real-time video
-    func sendH264Data(_ h264Data: Data) {
+    func sendH264Data(_ h264Data: Data, metadata: FrameMetadata) {
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
-        // For large frames, send RAW data with simple prefix to avoid JSON encoding overhead
-        // JSON encoding adds ~33% size (base64), which can push frames over size limits
-        let isLargeFrame = h264Data.count > 10000  // 10KB threshold
-
-        var dataToSend: Data
-        if isLargeFrame {
-            // Send raw H.264 data with 1-byte type prefix (no JSON overhead)
-            // Prefix: 0xFF = raw H.264 keyframe
-            var rawData = Data([0xFF])
-            rawData.append(h264Data)
-            dataToSend = rawData
-            print("[Multipeer] 📦 Sending LARGE frame (\(h264Data.count) bytes → \(dataToSend.count) bytes RAW)")
-        } else {
-            // Small frames: use normal JSON encoding
-            let message = MultipeerMessage(type: .h264Frame, payload: h264Data)
-            guard let encodedData = try? JSONEncoder().encode(message) else { return }
-            dataToSend = encodedData
+        // Bundle H.264 data with metadata for jitter buffer
+        let frameWithMetadata = H264FrameWithMetadata(h264Data: h264Data, metadata: metadata)
+        guard let encodedData = try? JSONEncoder().encode(frameWithMetadata) else {
+            print("[Multipeer] ❌ Failed to encode frame with metadata")
+            return
         }
 
-        // LATENCY OPTIMIZATION: Use reliable for large frames (ensure delivery), unreliable for small
-        // Large frames need reliable mode to ensure they arrive
-        let mode: MCSessionSendDataMode = isLargeFrame ? .reliable : .unreliable
+        let message = MultipeerMessage(type: .h264Frame, payload: encodedData)
+        guard let dataToSend = try? JSONEncoder().encode(message) else { return }
 
-        // Send with appropriate mode
+        // ULTRA-LOW LATENCY: ALL frames sent unreliable (WebRTC/UDP style)
+        // Accept occasional frame loss rather than waiting for retransmission
+        // Keyframes sent every 0.5s for fast recovery from packet loss
+        let mode: MCSessionSendDataMode = .unreliable
+
+        // Send with unreliable mode
         do {
             try session.send(dataToSend, toPeers: session.connectedPeers, with: mode)
             framesSent += 1
@@ -268,7 +260,7 @@ class MultipeerService: NSObject, ObservableObject {
             framesFailed += 1
             totalFramesFailed += 1
             adjustQualityIfNeeded()
-            print("[Multipeer] ❌ Failed to send frame (\(dataToSend.count) bytes): \(error)")
+            // Silently fail for unreliable frames (expected behavior)
         }
     }
 
@@ -769,10 +761,11 @@ extension MultipeerService: MCSessionDelegate {
                 }
 
             case .h264Frame:
-                // WebRTC-STYLE: H.264 compressed frame (20-100x smaller, industry standard)
-                if let payload = message.payload {
-                    self.onH264DataReceived?(payload)
-                    // print("[Multipeer] ✅ Received H.264 frame: \(payload.count) bytes")
+                // WebRTC-STYLE: H.264 compressed frame with metadata for jitter buffer
+                if let payload = message.payload,
+                   let frameWithMetadata = try? JSONDecoder().decode(H264FrameWithMetadata.self, from: payload) {
+                    self.onH264DataReceived?(frameWithMetadata.h264Data, frameWithMetadata.metadata)
+                    // print("[Multipeer] ✅ Received H.264 frame: \(frameWithMetadata.h264Data.count) bytes, seq: \(frameWithMetadata.metadata.sequenceNumber)")
                 }
 
             case .pixelBufferFrame:
@@ -1024,6 +1017,12 @@ struct DeviceOrientation: Codable {
 struct VideoFrameData: Codable {
     let imageData: Data
     let orientation: DeviceOrientation
+}
+
+// MARK: - H.264 Frame with Metadata for Jitter Buffer
+struct H264FrameWithMetadata: Codable {
+    let h264Data: Data
+    let metadata: FrameMetadata
 }
 
 // MARK: - Adaptive Streaming Data Structures (Chalk-style)

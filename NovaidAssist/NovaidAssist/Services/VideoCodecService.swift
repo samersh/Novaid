@@ -3,6 +3,25 @@ import AVFoundation
 import VideoToolbox
 import CoreMedia
 
+/// Frame metadata for jitter buffer and timestamp synchronization
+struct FrameMetadata: Codable {
+    let sequenceNumber: Int64       // Frame sequence number for ordering
+    let captureTimestamp: Double    // Unix timestamp when frame was captured (iPhone)
+    let presentationTime: Double    // CMTime as seconds
+    let isKeyframe: Bool            // True if this is an I-frame
+
+    init(sequenceNumber: Int64, captureTimestamp: Date, presentationTime: CMTime, isKeyframe: Bool) {
+        self.sequenceNumber = sequenceNumber
+        self.captureTimestamp = captureTimestamp.timeIntervalSince1970
+        self.presentationTime = CMTimeGetSeconds(presentationTime)
+        self.isKeyframe = isKeyframe
+    }
+
+    func getCaptureDate() -> Date {
+        return Date(timeIntervalSince1970: captureTimestamp)
+    }
+}
+
 /// Hardware-accelerated H.264 video encoding and decoding service
 /// Based on WebRTC and Zoho Lens best practices
 /// Thread-safe: Uses dedicated encoding/decoding queues
@@ -20,6 +39,8 @@ class VideoCodecService: NSObject {
     private let decodingQueue = DispatchQueue(label: "com.novaid.videoDecoding", qos: .userInteractive)
     private var formatDescription: CMFormatDescription?
     private var frameCounter: Int64 = 0
+    private var encodeSequenceNumber: Int64 = 0  // Sequence number for encoded frames
+    private var pendingFrameMetadata: [Int64: FrameMetadata] = [:]  // frameCounter -> metadata for decoding callback
 
     // MARK: - Configuration
     // Industry standard: 720p at 30fps for remote assistance
@@ -38,12 +59,13 @@ class VideoCodecService: NSObject {
     private var lastBitrateAdjustment: Date = Date()
 
     // Callbacks
-    var onEncodedFrame: ((Data, CMTime) -> Void)?
-    var onDecodedFrame: ((CVPixelBuffer) -> Void)?
+    var onEncodedFrame: ((Data, FrameMetadata) -> Void)?
+    var onDecodedFrame: ((CVPixelBuffer, FrameMetadata) -> Void)?
     var onSPSPPSExtracted: ((Data, Data) -> Void)?  // (SPS, PPS) - sent once at start
 
     // MARK: - Latency Monitoring
     private var frameCaptureTimestamps: [Int64: Date] = [:]  // frameNumber -> captureTime (iPhone only)
+    private var frameSequenceNumbers: [Int64: Int64] = [:]  // frameNumber -> sequenceNumber
     private var frameDecodeStartTimes: [Int64: Date] = [:]  // frameNumber -> decodeStartTime (iPad only)
     private var encodeLatencySamples: [TimeInterval] = []  // iPhone encode latency
     private var decodeLatencySamples: [TimeInterval] = []  // iPad decode latency
@@ -215,9 +237,11 @@ class VideoCodecService: NSObject {
             return
         }
 
-        // LATENCY TRACKING: Record capture timestamp
+        // LATENCY TRACKING: Record capture timestamp and sequence number
         let frameNumber = presentationTime.value
         frameCaptureTimestamps[frameNumber] = captureTime
+        encodeSequenceNumber += 1
+        frameSequenceNumbers[frameNumber] = encodeSequenceNumber
 
         pendingEncodingFrames += 1
 
@@ -287,12 +311,22 @@ class VideoCodecService: NSObject {
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let frameNumber = presentationTime.value
 
-        if let captureTime = service.frameCaptureTimestamps[frameNumber] {
+        // Get capture time and sequence number
+        var captureTime = Date()
+        var sequenceNumber: Int64 = 0
+
+        if let storedCaptureTime = service.frameCaptureTimestamps[frameNumber] {
+            captureTime = storedCaptureTime
             let encodeLatency = encodeEndTime.timeIntervalSince(captureTime) * 1000  // Convert to ms
             service.recordEncodeLatency(encodeLatency)
 
             // Clean up
             service.frameCaptureTimestamps.removeValue(forKey: frameNumber)
+        }
+
+        if let storedSeqNum = service.frameSequenceNumbers[frameNumber] {
+            sequenceNumber = storedSeqNum
+            service.frameSequenceNumbers.removeValue(forKey: frameNumber)
         }
 
         // Extract encoded data
@@ -375,10 +409,18 @@ class VideoCodecService: NSObject {
             }
         }
 
+        // Create frame metadata for jitter buffer and timestamp synchronization
+        let metadata = FrameMetadata(
+            sequenceNumber: sequenceNumber,
+            captureTimestamp: captureTime,
+            presentationTime: presentationTime,
+            isKeyframe: isKeyFrame
+        )
+
         // Send frame data WITHOUT SPS/PPS prepended
         // This makes keyframes much smaller (~60KB instead of 168KB)!
         Task { @MainActor in
-            service.onEncodedFrame?(data, presentationTime)
+            service.onEncodedFrame?(data, metadata)
         }
     }
 
@@ -709,7 +751,7 @@ class VideoCodecService: NSObject {
     // MARK: - Decoding
 
     /// Decode H.264 data to pixel buffer
-    func decode(data: Data) {
+    func decode(data: Data, metadata: FrameMetadata) {
         // CRITICAL: DON'T drop frames until decoder is initialized!
         // We need to find the keyframe with SPS/PPS first
         if decodingSession != nil {
@@ -723,6 +765,9 @@ class VideoCodecService: NSObject {
             // Decoder not initialized - NEVER drop frames, we need to find SPS/PPS!
             print("[VideoCodec] 🔍 Decoder not initialized - accepting all frames to find SPS/PPS")
         }
+
+        // Store metadata for this frame to pass to callback after decoding
+        pendingFrameMetadata[frameCounter] = metadata
 
         pendingDecodingFrames += 1
         let decodeStartTime = Date()  // LATENCY TRACKING: Record decode start time
@@ -873,11 +918,20 @@ class VideoCodecService: NSObject {
             service.frameDecodeStartTimes.removeValue(forKey: frameNumber)
         }
 
-        print("[VideoCodec] ✅ Frame decoded successfully, sending to Metal renderer")
+        // Retrieve metadata for this frame
+        guard let metadata = service.pendingFrameMetadata[frameNumber] else {
+            print("[VideoCodec] ⚠️ No metadata found for frame \(frameNumber)")
+            return
+        }
 
-        // Call callback on main thread
+        // Clean up metadata
+        service.pendingFrameMetadata.removeValue(forKey: frameNumber)
+
+        print("[VideoCodec] ✅ Frame decoded successfully, sending to jitter buffer (seq: \(metadata.sequenceNumber))")
+
+        // Call callback on main thread with metadata
         Task { @MainActor in
-            service.onDecodedFrame?(imageBuffer)
+            service.onDecodedFrame?(imageBuffer, metadata)
         }
     }
 
