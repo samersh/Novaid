@@ -3,6 +3,7 @@ import MultipeerConnectivity
 import Combine
 import UIKit
 import CoreVideo
+import CoreMedia
 
 /// Service for peer-to-peer connection using MultipeerConnectivity
 /// Allows iPhone and iPad to connect directly via WiFi/Bluetooth without a server
