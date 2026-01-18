@@ -85,6 +85,12 @@ struct ARCameraView: UIViewRepresentable {
         private var lastFrameCaptureTime: Date = Date()
         private var frameCaptureInterval: TimeInterval = 0  // 0 = capture every frame
 
+        // AR RECONSTRUCTION: Depth and plane data transmission (Zoho Lens / Chalk style)
+        private var lastPlaneUpdateTime: Date = Date()
+        private let planeUpdateInterval: TimeInterval = 2.0  // Send planes every 2 seconds
+        private var lastDepthMapTime: Date = Date()
+        private let depthMapInterval: TimeInterval = 0.5  // Send depth every 500ms
+
         func startFrameStreaming() {
             // Setup H.264 hardware encoder for WebRTC-style transmission
             setupH264Encoder()
@@ -518,15 +524,32 @@ struct ARCameraView: UIViewRepresentable {
             // This gives us true 30 FPS synchronized with camera frames
             captureAndSendFrame(from: frame)
 
-            // Update screen positions for 2D overlay
+            // AR RECONSTRUCTION: Send depth map and plane data to iPad (Zoho Lens / Chalk style)
+            let now = Date()
+
+            // Send depth map periodically (if available)
+            if now.timeIntervalSince(lastDepthMapTime) >= depthMapInterval {
+                sendDepthMapIfAvailable(from: frame)
+                lastDepthMapTime = now
+            }
+
+            // Send detected planes periodically
+            if now.timeIntervalSince(lastPlaneUpdateTime) >= planeUpdateInterval {
+                sendDetectedPlanes()
+                lastPlaneUpdateTime = now
+            }
+
+            // Update screen positions for 2D overlay AND send 3D anchor data to iPad
             guard let manager = annotationManager, let arView = arView else { return }
 
-            // LATENCY OPTIMIZATION: Throttle annotation position updates to 10 FPS (was 30 FPS)
-            let now = Date()
+            // LATENCY OPTIMIZATION: Throttle annotation updates to 10 FPS (was 30 FPS)
             let shouldSendUpdate = now.timeIntervalSince(lastAnnotationUpdateTime) >= minAnnotationUpdateInterval
 
             for (id, anchor) in annotationAnchors {
                 let worldPos = anchor.position(relativeTo: nil)
+                let worldOrientation = anchor.orientation(relativeTo: nil)
+
+                // Update 2D screen position for local display
                 if let screenPoint = arView.project(worldPos) {
                     let bounds = arView.bounds
                     let isOnScreen = screenPoint.x >= 0 && screenPoint.x <= bounds.width &&
@@ -535,19 +558,13 @@ struct ARCameraView: UIViewRepresentable {
                     let normalized = AnnotationPoint.normalized(from: screenPoint, in: bounds.size)
                     manager.updateScreenPosition(for: id, point: normalized)
                     manager.setVisibility(for: id, visible: isOnScreen)
-
-                    // Send position update to iPad for AR tracking (throttled to 10 FPS)
-                    if shouldSendUpdate {
-                        Task { @MainActor in
-                            MultipeerService.shared.sendAnnotationPositionUpdate(
-                                id: id,
-                                normalizedX: normalized.x,
-                                normalizedY: normalized.y
-                            )
-                        }
-                    }
                 } else {
                     manager.setVisibility(for: id, visible: false)
+                }
+
+                // Send 3D anchor data to iPad for AR reconstruction (throttled to 10 FPS)
+                if shouldSendUpdate {
+                    send3DAnchorData(annotationId: id, position: worldPos, orientation: worldOrientation)
                 }
             }
 
@@ -565,6 +582,101 @@ struct ARCameraView: UIViewRepresentable {
                 print("[AR] Tracking limited: \(reason)")
             case .notAvailable:
                 print("[AR] Tracking not available")
+            }
+        }
+
+        // MARK: - AR Reconstruction Methods (Zoho Lens / Chalk style)
+
+        private func sendDepthMapIfAvailable(from frame: ARFrame) {
+            // Extract scene depth if available (LiDAR or ARKit depth estimation)
+            guard let sceneDepth = frame.sceneDepth else {
+                // Depth not available on this device
+                return
+            }
+
+            let depthMap = sceneDepth.depthMap
+            let width = CVPixelBufferGetWidth(depthMap)
+            let height = CVPixelBufferGetHeight(depthMap)
+
+            // Lock the pixel buffer to access depth data
+            CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+            guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return }
+            let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+            let bufferSize = bytesPerRow * height
+            let depthData = Data(bytes: baseAddress, count: bufferSize)
+
+            // Extract camera intrinsics and transform
+            let intrinsics = frame.camera.intrinsics
+            let intrinsicsArray: [Float] = [
+                intrinsics[0, 0], intrinsics[0, 1], intrinsics[0, 2],
+                intrinsics[1, 0], intrinsics[1, 1], intrinsics[1, 2],
+                intrinsics[2, 0], intrinsics[2, 1], intrinsics[2, 2]
+            ]
+
+            let transform = frame.camera.transform
+            let transformArray: [Float] = [
+                transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
+                transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
+                transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
+                transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
+            ]
+
+            let depthMapData = DepthMapData(
+                width: width,
+                height: height,
+                depthData: depthData,
+                cameraIntrinsics: intrinsicsArray,
+                cameraTransform: transformArray,
+                timestamp: Date()
+            )
+
+            Task { @MainActor in
+                MultipeerService.shared.sendDepthMap(depthMapData)
+            }
+        }
+
+        private func sendDetectedPlanes() {
+            guard !detectedPlanes.isEmpty else { return }
+
+            let planes = detectedPlanes.values.map { planeAnchor -> DetectedPlaneData.Plane in
+                let transform = planeAnchor.transform
+                let transformArray: [Float] = [
+                    transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
+                    transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
+                    transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
+                    transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
+                ]
+
+                return DetectedPlaneData.Plane(
+                    identifier: planeAnchor.identifier.uuidString,
+                    center: [planeAnchor.center.x, planeAnchor.center.y, planeAnchor.center.z],
+                    extent: [planeAnchor.planeExtent.width, planeAnchor.planeExtent.height],
+                    transform: transformArray,
+                    classification: planeAnchor.classification.description,
+                    alignment: planeAnchor.alignment == .horizontal ? "horizontal" : "vertical"
+                )
+            }
+
+            let planesData = DetectedPlaneData(planes: planes, timestamp: Date())
+
+            Task { @MainActor in
+                MultipeerService.shared.sendDetectedPlanes(planesData)
+            }
+        }
+
+        private func send3DAnchorData(annotationId: String, position: SIMD3<Float>, orientation: simd_quatf) {
+            let anchorData = AnnotationAnchorData(
+                annotationId: annotationId,
+                worldPosition: [position.x, position.y, position.z],
+                worldOrientation: [orientation.vector.x, orientation.vector.y, orientation.vector.z, orientation.vector.w],
+                anchoredToPlaneId: nil,  // TODO: Track which plane annotation is anchored to
+                timestamp: Date()
+            )
+
+            Task { @MainActor in
+                MultipeerService.shared.sendAnnotationAnchorData(anchorData)
             }
         }
 

@@ -52,6 +52,11 @@ class MultipeerService: NSObject, ObservableObject {
     var onFrameMetadataReceived: ((FrameMetadata) -> Void)?  // Metadata for freeze-frame mode
     var onQoSMetricsReceived: ((Double, Double, Double) -> Void)?  // RTT, jitter, packet loss from peer
 
+    // AR RECONSTRUCTION: Depth and scene understanding callbacks (Zoho Lens / Chalk style)
+    var onDepthMapReceived: ((DepthMapData) -> Void)?  // Depth map for 3D reconstruction
+    var onDetectedPlanesReceived: ((DetectedPlaneData) -> Void)?  // AR planes from iPhone
+    var onAnnotationAnchorDataReceived: ((AnnotationAnchorData) -> Void)?  // 3D anchor for annotation
+
     // MARK: - Private Properties
     private var peerID: MCPeerID!
     private var session: MCSession!
@@ -582,6 +587,30 @@ class MultipeerService: NSObject, ObservableObject {
         sendMessage(message)
     }
 
+    // MARK: - AR Reconstruction Methods (Zoho Lens / Chalk style)
+
+    /// Send depth map data to iPad for 3D reconstruction
+    func sendDepthMap(_ depthMapData: DepthMapData) {
+        let payload = try? JSONEncoder().encode(depthMapData)
+        let message = MultipeerMessage(type: .depthMap, payload: payload)
+        sendMessage(message)
+    }
+
+    /// Send detected AR planes to iPad
+    func sendDetectedPlanes(_ planesData: DetectedPlaneData) {
+        let payload = try? JSONEncoder().encode(planesData)
+        let message = MultipeerMessage(type: .detectedPlanes, payload: payload)
+        sendMessage(message)
+    }
+
+    /// Send annotation anchor data (3D position + orientation)
+    func sendAnnotationAnchorData(_ anchorData: AnnotationAnchorData) {
+        let payload = try? JSONEncoder().encode(anchorData)
+        let message = MultipeerMessage(type: .annotationAnchorData, payload: payload)
+        sendMessage(message)
+        print("[Multipeer] 📍 Sent annotation anchor: \(anchorData.annotationId) at position \(anchorData.worldPosition)")
+    }
+
     // MARK: - Cleanup
 
     func stopAll() {
@@ -809,6 +838,32 @@ extension MultipeerService: MCSessionDelegate {
                    let metrics = try? JSONDecoder().decode(QoSMetricsMessage.self, from: payload) {
                     self.onQoSMetricsReceived?(metrics.rttMs, metrics.jitterMs, metrics.packetLossPct)
                 }
+
+            // AR RECONSTRUCTION: Depth and scene understanding handlers
+
+            case .depthMap:
+                // Received depth map for 3D reconstruction
+                if let payload = message.payload,
+                   let depthMap = try? JSONDecoder().decode(DepthMapData.self, from: payload) {
+                    print("[Multipeer] 🗺️ Received depth map: \(depthMap.width)x\(depthMap.height)")
+                    self.onDepthMapReceived?(depthMap)
+                }
+
+            case .detectedPlanes:
+                // Received detected AR planes from iPhone
+                if let payload = message.payload,
+                   let planes = try? JSONDecoder().decode(DetectedPlaneData.self, from: payload) {
+                    print("[Multipeer] 🏗️ Received \(planes.planes.count) detected planes")
+                    self.onDetectedPlanesReceived?(planes)
+                }
+
+            case .annotationAnchorData:
+                // Received 3D anchor data for annotation
+                if let payload = message.payload,
+                   let anchorData = try? JSONDecoder().decode(AnnotationAnchorData.self, from: payload) {
+                    print("[Multipeer] 📍 Received annotation anchor: \(anchorData.annotationId)")
+                    self.onAnnotationAnchorDataReceived?(anchorData)
+                }
             }
         }
     }
@@ -930,6 +985,11 @@ struct MultipeerMessage: Codable {
         case streamingModeChange  // Notify mode switch (normal/lowBandwidth/freezeFrame/audioOnly)
         case frameMetadata  // Camera intrinsics + pose for freeze-frame mode
         case qosMetrics  // Share QoS metrics (RTT, jitter, packet loss)
+
+        // AR RECONSTRUCTION: Depth and scene understanding (Zoho Lens / Chalk style)
+        case depthMap  // Depth data from iPhone LiDAR or ARKit depth estimation
+        case detectedPlanes  // ARPlaneAnchors from iPhone scene understanding
+        case annotationAnchorData  // 3D anchor position + orientation for annotation
     }
 
     let type: MessageType
@@ -1000,5 +1060,41 @@ struct QoSMetricsMessage: Codable {
     let rttMs: Double
     let jitterMs: Double
     let packetLossPct: Double
+    let timestamp: Date
+}
+
+// MARK: - AR Reconstruction Data Structures (Zoho Lens / Chalk style)
+
+/// Depth map data from iPhone for 3D reconstruction
+struct DepthMapData: Codable {
+    let width: Int
+    let height: Int
+    let depthData: Data  // Compressed depth values (Float32 array)
+    let cameraIntrinsics: [Float]  // 3x3 matrix
+    let cameraTransform: [Float]  // 4x4 world-from-camera matrix
+    let timestamp: Date
+}
+
+/// Detected AR plane information
+struct DetectedPlaneData: Codable {
+    struct Plane: Codable {
+        let identifier: String
+        let center: [Float]  // 3D position (x, y, z)
+        let extent: [Float]  // Size (width, height)
+        let transform: [Float]  // 4x4 transform matrix
+        let classification: String  // "wall", "floor", "table", etc.
+        let alignment: String  // "horizontal", "vertical"
+    }
+
+    let planes: [Plane]
+    let timestamp: Date
+}
+
+/// AR anchor data for annotation positioning
+struct AnnotationAnchorData: Codable {
+    let annotationId: String
+    let worldPosition: [Float]  // 3D position (x, y, z)
+    let worldOrientation: [Float]  // Quaternion (x, y, z, w)
+    let anchoredToPlaneId: String?  // Plane identifier if anchored to plane
     let timestamp: Date
 }
