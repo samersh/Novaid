@@ -322,7 +322,7 @@ struct ARCameraView: UIViewRepresentable {
             }
         }
 
-        private func sendH264Frame(_ h264Data: Data, metadata: FrameMetadata) {
+        private func sendH264Frame(_ h264Data: Data, metadata: VideoFrameMetadata) {
             Task { @MainActor in
                 MultipeerService.shared.sendH264Data(h264Data, metadata: metadata)
             }

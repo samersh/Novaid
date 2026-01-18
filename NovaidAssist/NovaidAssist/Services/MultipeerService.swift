@@ -40,7 +40,7 @@ class MultipeerService: NSObject, ObservableObject {
     var onVideoResumed: (([Annotation]) -> Void)?
     var onVideoFrameReceived: ((UIImage) -> Void)?
     var onPixelBufferReceived: ((CVPixelBuffer) -> Void)?  // New: for direct pixel buffer transmission
-    var onH264DataReceived: ((Data, FrameMetadata) -> Void)?  // H.264 compressed frames with metadata for jitter buffer
+    var onH264DataReceived: ((Data, VideoFrameMetadata) -> Void)?  // H.264 compressed frames with metadata for jitter buffer
     var onSPSPPSReceived: ((Data, Data) -> Void)?  // SPS/PPS parameter sets (sent once at stream start)
     var onFrozenFrameReceived: ((UIImage) -> Void)?
     var onAudioDataReceived: ((Data) -> Void)?
@@ -230,7 +230,7 @@ class MultipeerService: NSObject, ObservableObject {
 
     /// Send H.264 compressed frame (WebRTC-style, 20-100x smaller than raw pixels)
     /// This is the FASTEST method - industry standard for real-time video
-    func sendH264Data(_ h264Data: Data, metadata: FrameMetadata) {
+    func sendH264Data(_ h264Data: Data, metadata: VideoFrameMetadata) {
         guard isConnected, !session.connectedPeers.isEmpty else { return }
 
         // Bundle H.264 data with metadata for jitter buffer
@@ -1022,7 +1022,7 @@ struct VideoFrameData: Codable {
 // MARK: - H.264 Frame with Metadata for Jitter Buffer
 struct H264FrameWithMetadata: Codable {
     let h264Data: Data
-    let metadata: FrameMetadata
+    let metadata: VideoFrameMetadata
 }
 
 // MARK: - Adaptive Streaming Data Structures (Chalk-style)

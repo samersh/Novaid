@@ -166,7 +166,7 @@ class MetalVideoRenderer: UIView {
     // MARK: - Public API
 
     /// Add frame to jitter buffer (WebRTC-style buffering for smooth playout)
-    func addFrameToJitterBuffer(_ pixelBuffer: CVPixelBuffer, metadata: FrameMetadata) {
+    func addFrameToJitterBuffer(_ pixelBuffer: CVPixelBuffer, metadata: VideoFrameMetadata) {
         let captureDate = metadata.getCaptureDate()
         jitterBuffer.addFrame(
             pixelBuffer: pixelBuffer,
@@ -439,8 +439,11 @@ struct MetalVideoView: UIViewRepresentable {
         let videoCodec = VideoCodecService.shared
         context.coordinator.videoCodec = videoCodec
 
+        // Access shared instances directly to avoid SwiftUI binding issues
+        let multipeer = MultipeerService.shared
+
         // SPS/PPS: Initialize decoder when format description arrives (sent once at stream start)
-        multipeerService.onSPSPPSReceived = { spsData, ppsData in
+        multipeer.onSPSPPSReceived = { spsData, ppsData in
             print("[MetalVideoView] 🎬 Received SPS/PPS, initializing decoder...")
             let success = videoCodec.setupDecoderFromSPSPPS(spsData: spsData, ppsData: ppsData)
             if success {
@@ -451,42 +454,42 @@ struct MetalVideoView: UIViewRepresentable {
         }
 
         // PRIMARY: H.264 compressed frames (WebRTC-style - 20-100x smaller, <200ms latency)
-        multipeerService.onH264DataReceived = { h264Data, metadata in
+        multipeer.onH264DataReceived = { h264Data, metadata in
             videoCodec.decode(data: h264Data, metadata: metadata)
         }
 
         // Connect decoder output to jitter buffer
-        videoCodec.onDecodedFrame = { pixelBuffer, metadata in
+        videoCodec.onDecodedFrame = { (pixelBuffer: CVPixelBuffer, metadata: VideoFrameMetadata) in
             renderer.addFrameToJitterBuffer(pixelBuffer, metadata: metadata)
         }
 
         // FALLBACK: Direct CVPixelBuffer transmission (for backwards compatibility)
-        multipeerService.onPixelBufferReceived = { pixelBuffer in
+        multipeer.onPixelBufferReceived = { pixelBuffer in
             renderer.updatePixelBuffer(pixelBuffer)
         }
 
         // LEGACY: UIImage frames (DEPRECATED, for backwards compatibility)
-        multipeerService.onVideoFrameReceived = { image in
+        multipeer.onVideoFrameReceived = { image in
             renderer.updateImage(image)
         }
 
-        multipeerService.onFrozenFrameReceived = { image in
+        multipeer.onFrozenFrameReceived = { image in
             renderer.updateImage(image)
         }
 
         // ADAPTIVE STREAMING: QoS monitoring callbacks (Chalk-style)
-        multipeerService.onQoSMetricsReceived = { rttMs, jitterMs, packetLossPct in
+        multipeer.onQoSMetricsReceived = { rttMs, jitterMs, packetLossPct in
             print("[QoS] 📊 Received metrics from iPhone - RTT: \(String(format: "%.1f", rttMs))ms, " +
                   "Jitter: \(String(format: "%.1f", jitterMs))ms, " +
                   "Loss: \(String(format: "%.2f", packetLossPct))%")
         }
 
-        multipeerService.onStreamingModeChanged = { mode in
+        multipeer.onStreamingModeChanged = { mode in
             print("[QoS] 🎯 iPhone changed streaming mode to: \(mode)")
             // iPad can adjust UI or display mode indicator
         }
 
-        multipeerService.onFrameMetadataReceived = { metadata in
+        multipeer.onFrameMetadataReceived = { (metadata: FrameMetadata) in
             print("[QoS] 📸 Received frame metadata for freeze-frame mode (frameId: \(metadata.frameId))")
             // Store metadata for potential annotation on frozen frames
         }

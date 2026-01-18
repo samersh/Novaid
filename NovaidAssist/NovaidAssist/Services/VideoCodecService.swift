@@ -4,7 +4,7 @@ import VideoToolbox
 import CoreMedia
 
 /// Frame metadata for jitter buffer and timestamp synchronization
-struct FrameMetadata: Codable {
+struct VideoFrameMetadata: Codable {
     let sequenceNumber: Int64       // Frame sequence number for ordering
     let captureTimestamp: Double    // Unix timestamp when frame was captured (iPhone)
     let presentationTime: Double    // CMTime as seconds
@@ -40,7 +40,7 @@ class VideoCodecService: NSObject {
     private var formatDescription: CMFormatDescription?
     private var frameCounter: Int64 = 0
     private var encodeSequenceNumber: Int64 = 0  // Sequence number for encoded frames
-    private var pendingFrameMetadata: [Int64: FrameMetadata] = [:]  // frameCounter -> metadata for decoding callback
+    private var pendingFrameMetadata: [Int64: VideoFrameMetadata] = [:]  // frameCounter -> metadata for decoding callback
 
     // MARK: - Configuration
     // Industry standard: 720p at 30fps for remote assistance
@@ -59,8 +59,8 @@ class VideoCodecService: NSObject {
     private var lastBitrateAdjustment: Date = Date()
 
     // Callbacks
-    var onEncodedFrame: ((Data, FrameMetadata) -> Void)?
-    var onDecodedFrame: ((CVPixelBuffer, FrameMetadata) -> Void)?
+    var onEncodedFrame: ((Data, VideoFrameMetadata) -> Void)?
+    var onDecodedFrame: ((CVPixelBuffer, VideoFrameMetadata) -> Void)?
     var onSPSPPSExtracted: ((Data, Data) -> Void)?  // (SPS, PPS) - sent once at start
 
     // MARK: - Latency Monitoring
@@ -410,7 +410,7 @@ class VideoCodecService: NSObject {
         }
 
         // Create frame metadata for jitter buffer and timestamp synchronization
-        let metadata = FrameMetadata(
+        let metadata = VideoFrameMetadata(
             sequenceNumber: sequenceNumber,
             captureTimestamp: captureTime,
             presentationTime: presentationTime,
@@ -751,7 +751,7 @@ class VideoCodecService: NSObject {
     // MARK: - Decoding
 
     /// Decode H.264 data to pixel buffer
-    func decode(data: Data, metadata: FrameMetadata) {
+    func decode(data: Data, metadata: VideoFrameMetadata) {
         // CRITICAL: DON'T drop frames until decoder is initialized!
         // We need to find the keyframe with SPS/PPS first
         if decodingSession != nil {
