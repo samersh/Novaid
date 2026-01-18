@@ -27,10 +27,10 @@ class VideoCodecService: NSObject {
     private let targetHeight: Int32 = 1280
     private let targetFrameRate: Int32 = 30
 
-    // ULTRA-LOW LATENCY: Lower bitrate for faster encoding and lower bandwidth
-    private var currentBitrate: Int = 1_500_000 // 1.5 Mbps (reduced from 2.5 Mbps)
-    private let minBitrate: Int = 500_000       // 500 Kbps
-    private let maxBitrate: Int = 2_000_000     // 2 Mbps (reduced from 4 Mbps)
+    // QUALITY vs LATENCY BALANCE: Higher bitrate for better quality, optimized for low latency
+    private var currentBitrate: Int = 3_500_000 // 3.5 Mbps - good quality for 720p
+    private let minBitrate: Int = 2_000_000     // 2 Mbps minimum
+    private let maxBitrate: Int = 5_000_000     // 5 Mbps maximum
 
     // Network monitoring
     private var packetsLost: Int = 0
@@ -182,21 +182,28 @@ class VideoCodecService: NSObject {
             value: 0 as CFNumber  // No slice size limit
         )
 
-        // Hardware acceleration
+        // Hardware acceleration (required for low latency)
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
             value: kCFBooleanTrue
         )
 
-        // ULTRA-LOW LATENCY: Prioritize encoding speed over quality
+        // QUALITY vs LATENCY: Higher bitrate allows better quality without sacrificing speed
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_Quality,
-            value: 0.5 as CFNumber  // Balance between quality and speed
+            value: 0.7 as CFNumber  // Increased from 0.5 for better quality (we have more bitrate now)
         )
 
-        print("[VideoCodec] 🚀 Encoder configured for ULTRA-LOW LATENCY: \(currentBitrate / 1_000_000) Mbps, Baseline Profile, 1s keyframe interval")
+        // HIGH PRIORITY: Ensure encoding is prioritized for minimal latency
+        VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+            value: kCFBooleanTrue
+        )
+
+        print("[VideoCodec] 🚀 Encoder: \(currentBitrate / 1_000_000) Mbps, Quality=0.7, Baseline, HW accel, LOW LATENCY")
     }
 
     // MARK: - Encoding
@@ -577,6 +584,13 @@ class VideoCodecService: NSObject {
             value: kCFBooleanTrue
         )
 
+        // ULTRA-LOW LATENCY: Minimize buffering - decode and display immediately (1 frame buffer)
+        VTSessionSetProperty(
+            session,
+            key: kVTDecompressionPropertyKey_MaxFrameDelayCount,
+            value: 1 as CFNumber  // Only buffer 1 frame - aggressive low latency
+        )
+
         // ULTRA-LOW LATENCY: Use 2 threads for parallel decoding (faster on modern hardware)
         VTSessionSetProperty(
             session,
@@ -584,8 +598,15 @@ class VideoCodecService: NSObject {
             value: 2 as CFNumber
         )
 
+        // Require hardware acceleration (GPU decode = faster)
+        VTSessionSetProperty(
+            session,
+            key: kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
+            value: kCFBooleanTrue
+        )
+
         decodingSession = session
-        print("[VideoCodec] 🚀 H.264 hardware decoder ready for ULTRA-LOW LATENCY")
+        print("[VideoCodec] 🚀 H.264 decoder: MINIMAL BUFFERING (1 frame) + HW accel for ULTRA-LOW LATENCY")
         return true
     }
 
