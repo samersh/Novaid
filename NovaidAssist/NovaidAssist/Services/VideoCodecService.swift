@@ -584,13 +584,6 @@ class VideoCodecService: NSObject {
             value: kCFBooleanTrue
         )
 
-        // ULTRA-LOW LATENCY: Minimize buffering - decode and display immediately (1 frame buffer)
-        VTSessionSetProperty(
-            session,
-            key: kVTDecompressionPropertyKey_MaxFrameDelayCount,
-            value: 1 as CFNumber  // Only buffer 1 frame - aggressive low latency
-        )
-
         // ULTRA-LOW LATENCY: Use 2 threads for parallel decoding (faster on modern hardware)
         VTSessionSetProperty(
             session,
@@ -606,7 +599,7 @@ class VideoCodecService: NSObject {
         )
 
         decodingSession = session
-        print("[VideoCodec] 🚀 H.264 decoder: MINIMAL BUFFERING (1 frame) + HW accel for ULTRA-LOW LATENCY")
+        print("[VideoCodec] 🚀 H.264 decoder: RealTime mode + 2 threads + HW accel for ULTRA-LOW LATENCY")
         return true
     }
 
