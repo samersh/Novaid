@@ -26,10 +26,14 @@ struct ProfessionalVideoCallView: View {
                 MetalVideoView()
                     .ignoresSafeArea()
 
-                // Annotations overlay - constrained to video area
-                AnnotationOverlayView(annotations: callManager.annotations)
-                    .frame(width: videoFrame.width, height: videoFrame.height)
-                    .position(x: videoFrame.midX, y: videoFrame.midY)
+                // 3D AR Annotations overlay - constrained to video area
+                AR3DAnnotationView(
+                    annotations: callManager.annotations,
+                    containerSize: CGSize(width: videoFrame.width, height: videoFrame.height)
+                )
+                .frame(width: videoFrame.width, height: videoFrame.height)
+                .position(x: videoFrame.midX, y: videoFrame.midY)
+                .allowsHitTesting(false)
 
                 // Drawing canvas (when in drawing mode) - constrained to video area
                 if isDrawingMode {

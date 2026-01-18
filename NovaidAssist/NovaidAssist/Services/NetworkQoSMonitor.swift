@@ -146,8 +146,9 @@ class NetworkQoSMonitor {
 
         checkModeSwitch()
 
-        // Log metrics
-        print("[QoS] RTT: \(String(format: "%.1f", currentMetrics.rttMs))ms, " +
+        // Log metrics with current mode
+        print("[QoS] 📈 Mode: \(currentMode.rawValue) (\(currentMode.targetFPS) FPS) | " +
+              "RTT: \(String(format: "%.1f", currentMetrics.rttMs))ms, " +
               "Jitter: \(String(format: "%.1f", currentMetrics.jitterMs))ms, " +
               "Loss: \(String(format: "%.2f", currentMetrics.packetLossPct))%")
     }
@@ -156,8 +157,21 @@ class NetworkQoSMonitor {
         let recommendedMode = currentMetrics.recommendedMode
 
         if recommendedMode != currentMode {
-            print("[QoS] 🔄 Mode switch: \(currentMode.rawValue) → \(recommendedMode.rawValue)")
+            let oldMode = currentMode
             currentMode = recommendedMode
+
+            // DIAGNOSTIC: Log detailed mode switch information
+            print("╔════════════════════════════════════╗")
+            print("║  📊 STREAMING MODE SWITCH          ║")
+            print("╠════════════════════════════════════╣")
+            print("║ Old: \(oldMode.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0))  (\(oldMode.targetFPS) FPS)  ║")
+            print("║ New: \(recommendedMode.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0))  (\(recommendedMode.targetFPS) FPS)  ║")
+            print("╠════════════════════════════════════╣")
+            print("║ RTT:    \(String(format: "%6.1f", currentMetrics.rttMs))ms              ║")
+            print("║ Jitter: \(String(format: "%6.1f", currentMetrics.jitterMs))ms              ║")
+            print("║ Loss:   \(String(format: "%6.2f", currentMetrics.packetLossPct))%               ║")
+            print("╚════════════════════════════════════╝")
+
             modeChangeCallback?(recommendedMode)
         }
     }
