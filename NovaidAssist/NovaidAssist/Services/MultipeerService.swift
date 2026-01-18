@@ -658,14 +658,23 @@ extension MultipeerService: MCSessionDelegate {
     }
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        // Check if this is raw H.264 data (large frame with 0xFF prefix)
+        // LEGACY: Check if this is raw H.264 data (large frame with 0xFF prefix - old format without metadata)
+        // This path should not be used anymore since we now always bundle metadata with frames
         if data.count > 1 && data[0] == 0xFF {
             // Raw H.264 keyframe - extract actual H.264 data (skip 1-byte prefix)
             let h264Data = data.subdata(in: 1..<data.count)
-            print("[Multipeer] 📥 Received RAW H.264 frame: \(h264Data.count) bytes")
+            print("[Multipeer] ⚠️ Received LEGACY RAW H.264 frame without metadata: \(h264Data.count) bytes")
+
+            // Create fallback metadata for legacy frames (best-effort)
+            let fallbackMetadata = VideoFrameMetadata(
+                sequenceNumber: 0,  // Unknown sequence
+                captureTimestamp: Date(),  // Assume captured now
+                presentationTime: CMTime.zero,  // Unknown presentation time
+                isKeyframe: true  // Raw frames were always keyframes
+            )
 
             Task { @MainActor in
-                self.onH264DataReceived?(h264Data)
+                self.onH264DataReceived?(h264Data, fallbackMetadata)
             }
             return
         }
