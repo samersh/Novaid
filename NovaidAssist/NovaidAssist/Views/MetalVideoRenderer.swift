@@ -428,6 +428,23 @@ struct MetalVideoView: UIViewRepresentable {
             renderer.updateImage(image)
         }
 
+        // ADAPTIVE STREAMING: QoS monitoring callbacks (Chalk-style)
+        multipeerService.onQoSMetricsReceived = { rttMs, jitterMs, packetLossPct in
+            print("[QoS] 📊 Received metrics from iPhone - RTT: \(String(format: "%.1f", rttMs))ms, " +
+                  "Jitter: \(String(format: "%.1f", jitterMs))ms, " +
+                  "Loss: \(String(format: "%.2f", packetLossPct))%")
+        }
+
+        multipeerService.onStreamingModeChanged = { mode in
+            print("[QoS] 🎯 iPhone changed streaming mode to: \(mode)")
+            // iPad can adjust UI or display mode indicator
+        }
+
+        multipeerService.onFrameMetadataReceived = { metadata in
+            print("[QoS] 📸 Received frame metadata for freeze-frame mode (frameId: \(metadata.frameId))")
+            // Store metadata for potential annotation on frozen frames
+        }
+
         print("[MetalVideoView] ✅ H.264 decoder connected to Metal renderer")
         return renderer
     }

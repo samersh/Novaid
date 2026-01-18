@@ -202,7 +202,7 @@ class VideoCodecService: NSObject {
     // MARK: - Encoding
 
     /// Encode a pixel buffer to H.264
-    func encode(pixelBuffer: CVPixelBuffer, presentationTime: CMTime, captureTime: Date = Date()) {
+    func encode(pixelBuffer: CVPixelBuffer, presentationTime: CMTime, captureTime: Date = Date(), forceKeyframe: Bool = false) {
         guard let session = encodingSession else {
             print("[VideoCodec] ⚠️ No encoding session")
             return
@@ -214,13 +214,19 @@ class VideoCodecService: NSObject {
 
         pendingEncodingFrames += 1
 
+        // ADAPTIVE STREAMING: Force keyframe for freeze-frame mode
+        var frameProperties: CFDictionary? = nil
+        if forceKeyframe {
+            frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
+        }
+
         encodingQueue.async { [weak self] in
             let status = VTCompressionSessionEncodeFrame(
                 session,
                 imageBuffer: pixelBuffer,
                 presentationTimeStamp: presentationTime,
                 duration: .invalid,
-                frameProperties: nil,
+                frameProperties: frameProperties,
                 sourceFrameRefcon: nil,
                 infoFlagsOut: nil
             )

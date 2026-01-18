@@ -78,6 +78,13 @@ struct ARCameraView: UIViewRepresentable {
         private var isEncoderSetup = false
         private var frameNumber: Int64 = 0
 
+        // ADAPTIVE STREAMING: QoS monitoring and mode switching (Chalk-style)
+        private let qosMonitor = NetworkQoSMonitor()
+        private var currentStreamingMode: NetworkQoSMonitor.StreamingMode = .normal
+        private var targetFPS: Int = 30
+        private var lastFrameCaptureTime: Date = Date()
+        private var frameCaptureInterval: TimeInterval = 0  // 0 = capture every frame
+
         func startFrameStreaming() {
             // Setup H.264 hardware encoder for WebRTC-style transmission
             setupH264Encoder()
@@ -85,10 +92,66 @@ struct ARCameraView: UIViewRepresentable {
             // REMOVED: Timer-based frame capture (was causing frame drops)
             // Instead, we now use ARSession's native frame callbacks in session(_ session: ARSession, didUpdate frame:)
 
+            // Setup adaptive streaming based on network quality (Chalk-style)
+            setupQoSMonitoring()
+
             // Enable device orientation notifications
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             print("[AR] Device orientation tracking started")
-            print("[AR] ✅ Using ARSession native frame callbacks for 30 FPS capture")
+            print("[AR] ✅ Using ARSession native frame callbacks for adaptive FPS capture")
+        }
+
+        private func setupQoSMonitoring() {
+            // Set up callback for mode changes
+            qosMonitor.setModeChangeCallback { [weak self] newMode in
+                guard let self = self else { return }
+
+                self.currentStreamingMode = newMode
+                self.targetFPS = newMode.targetFPS
+
+                // Calculate frame interval based on target FPS
+                self.frameCaptureInterval = self.targetFPS > 0 ? (1.0 / Double(self.targetFPS)) : 0
+
+                print("[QoS] 🎯 Mode changed to: \(newMode.rawValue) (target FPS: \(self.targetFPS))")
+
+                // Send mode change notification to iPad
+                Task { @MainActor in
+                    MultipeerService.shared.sendStreamingModeChange(newMode.rawValue)
+                }
+            }
+
+            // Set up pong callback to record RTT
+            MultipeerService.shared.onPongReceived = { [weak self] pingId in
+                guard let self = self else { return }
+                self.qosMonitor.recordPongReceived(pingId: pingId)
+
+                // Periodically send QoS metrics to iPad
+                let metrics = self.qosMonitor.getCurrentMetrics()
+                MultipeerService.shared.sendQoSMetrics(
+                    rttMs: metrics.rttMs,
+                    jitterMs: metrics.jitterMs,
+                    packetLossPct: metrics.packetLossPct
+                )
+            }
+
+            // Start ping-pong RTT measurement
+            startPingPongMonitoring()
+
+            print("[QoS] ✅ Adaptive streaming initialized (Chalk-style)")
+        }
+
+        private func startPingPongMonitoring() {
+            // Send ping every 1 second to measure RTT
+            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+
+                let pingId = UUID().uuidString
+                self.qosMonitor.recordPingSent(pingId: pingId)
+
+                Task { @MainActor in
+                    MultipeerService.shared.sendPing(pingId: pingId)
+                }
+            }
         }
 
         private func setupH264Encoder() {
@@ -137,8 +200,25 @@ struct ARCameraView: UIViewRepresentable {
             // Skip if video is frozen
             guard !isVideoFrozen else { return }
 
+            // ADAPTIVE STREAMING: Respect current mode's target FPS
+            let now = Date()
+
+            // Audio-only mode: Don't capture any frames
+            if currentStreamingMode == .audioOnly {
+                return
+            }
+
+            // Check if we should capture this frame based on target FPS
+            if frameCaptureInterval > 0 {
+                let timeSinceLastCapture = now.timeIntervalSince(lastFrameCaptureTime)
+                guard timeSinceLastCapture >= frameCaptureInterval else {
+                    return  // Skip this frame to maintain target FPS
+                }
+            }
+
+            lastFrameCaptureTime = now
+
             // ULTRA-LOW LATENCY: Process frames directly from ARSession callback
-            // No timer throttling - ARKit already provides frames at 30 FPS
             frameQueue.async { [weak self] in
                 self?.processAndSendFrame(frame)
             }
@@ -155,8 +235,23 @@ struct ARCameraView: UIViewRepresentable {
                 // - Dramatically lower latency due to smaller data size
                 // - Industry standard for real-time video (WebRTC, Zoom, etc.)
 
+                // FREEZE-FRAME MODE: Force keyframe generation for freeze-frame mode (1 FPS)
+                // This ensures each frame can be decoded independently
+                let forceKeyframe = currentStreamingMode == .freezeFrame
+
                 let presentationTime = CMTime(seconds: Double(frameNumber) / 30.0, preferredTimescale: 600)
-                videoCodec.encode(pixelBuffer: pixelBuffer, presentationTime: presentationTime, captureTime: captureTime)
+                videoCodec.encode(
+                    pixelBuffer: pixelBuffer,
+                    presentationTime: presentationTime,
+                    captureTime: captureTime,
+                    forceKeyframe: forceKeyframe
+                )
+
+                // Include frame metadata for freeze-frame mode (Chalk-style)
+                if currentStreamingMode == .freezeFrame {
+                    sendFrameMetadata(frame: frame)
+                }
+
                 frameNumber += 1
             } else {
                 // Fallback: Send pixel buffer directly (only if H.264 encoder failed)
@@ -178,6 +273,36 @@ struct ARCameraView: UIViewRepresentable {
                 Task { @MainActor in
                     self.lastCapturedFrame = thumbnailImage
                 }
+            }
+        }
+
+        private func sendFrameMetadata(frame: ARFrame) {
+            // Extract camera intrinsics (3x3 matrix)
+            let intrinsics = frame.camera.intrinsics
+            let intrinsicsArray: [Float] = [
+                intrinsics[0, 0], intrinsics[0, 1], intrinsics[0, 2],
+                intrinsics[1, 0], intrinsics[1, 1], intrinsics[1, 2],
+                intrinsics[2, 0], intrinsics[2, 1], intrinsics[2, 2]
+            ]
+
+            // Extract camera transform (4x4 world-from-camera matrix)
+            let transform = frame.camera.transform
+            let transformArray: [Float] = [
+                transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
+                transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
+                transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
+                transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
+            ]
+
+            // Send metadata to iPad for freeze-frame annotation
+            Task { @MainActor in
+                MultipeerService.shared.sendFrameMetadata(
+                    frameId: String(frameNumber),
+                    timestamp: Date(),
+                    intrinsics: intrinsicsArray,
+                    worldFromCamera: transformArray,
+                    trackingState: frame.camera.trackingState.description
+                )
             }
         }
 
@@ -607,6 +732,32 @@ extension ARPlaneAnchor.Classification {
         case .window: return "window"
         case .none: return "none"
         @unknown default: return "unknown"
+        }
+    }
+}
+
+// MARK: - ARCamera TrackingState Extension
+
+extension ARCamera.TrackingState {
+    var description: String {
+        switch self {
+        case .normal:
+            return "normal"
+        case .limited(let reason):
+            switch reason {
+            case .initializing:
+                return "limited_initializing"
+            case .excessiveMotion:
+                return "limited_excessive_motion"
+            case .insufficientFeatures:
+                return "limited_insufficient_features"
+            case .relocalizing:
+                return "limited_relocalizing"
+            @unknown default:
+                return "limited_unknown"
+            }
+        case .notAvailable:
+            return "not_available"
         }
     }
 }

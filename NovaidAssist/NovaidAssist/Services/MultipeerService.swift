@@ -45,6 +45,13 @@ class MultipeerService: NSObject, ObservableObject {
     var onFrozenFrameReceived: ((UIImage) -> Void)?
     var onAudioDataReceived: ((Data) -> Void)?
 
+    // ADAPTIVE STREAMING: QoS monitoring callbacks (Chalk-style)
+    var onPingReceived: ((String) -> Void)?  // Ping received, respond with pong
+    var onPongReceived: ((String) -> Void)?  // Pong received, calculate RTT
+    var onStreamingModeChanged: ((String) -> Void)?  // Mode changed by peer
+    var onFrameMetadataReceived: ((FrameMetadata) -> Void)?  // Metadata for freeze-frame mode
+    var onQoSMetricsReceived: ((Double, Double, Double) -> Void)?  // RTT, jitter, packet loss from peer
+
     // MARK: - Private Properties
     private var peerID: MCPeerID!
     private var session: MCSession!
@@ -521,6 +528,60 @@ class MultipeerService: NSObject, ObservableObject {
         print("[Multipeer] Sent toggle flashlight command: \(on ? "ON" : "OFF")")
     }
 
+    // MARK: - Adaptive Streaming Methods (Chalk-style)
+
+    /// Send ping for RTT measurement
+    func sendPing(pingId: String) {
+        let ping = PingMessage(pingId: pingId, timestamp: Date())
+        let payload = try? JSONEncoder().encode(ping)
+        let message = MultipeerMessage(type: .ping, payload: payload)
+        sendMessage(message)
+    }
+
+    /// Send pong response for RTT measurement
+    func sendPong(pingId: String) {
+        let pong = PongMessage(pingId: pingId, timestamp: Date())
+        let payload = try? JSONEncoder().encode(pong)
+        let message = MultipeerMessage(type: .pong, payload: payload)
+        sendMessage(message)
+    }
+
+    /// Send streaming mode change notification
+    func sendStreamingModeChange(_ mode: String) {
+        let modeMsg = StreamingModeMessage(mode: mode, timestamp: Date())
+        let payload = try? JSONEncoder().encode(modeMsg)
+        let message = MultipeerMessage(type: .streamingModeChange, payload: payload)
+        sendMessage(message)
+        print("[Multipeer] 🎯 Sent streaming mode change: \(mode)")
+    }
+
+    /// Send frame metadata for freeze-frame mode
+    func sendFrameMetadata(frameId: String, timestamp: Date, intrinsics: [Float], worldFromCamera: [Float], trackingState: String) {
+        let metadata = FrameMetadata(
+            frameId: frameId,
+            timestamp: timestamp,
+            cameraIntrinsics: intrinsics,
+            worldFromCamera: worldFromCamera,
+            trackingState: trackingState
+        )
+        let payload = try? JSONEncoder().encode(metadata)
+        let message = MultipeerMessage(type: .frameMetadata, payload: payload)
+        sendMessage(message)
+    }
+
+    /// Send QoS metrics to peer
+    func sendQoSMetrics(rttMs: Double, jitterMs: Double, packetLossPct: Double) {
+        let metrics = QoSMetricsMessage(
+            rttMs: rttMs,
+            jitterMs: jitterMs,
+            packetLossPct: packetLossPct,
+            timestamp: Date()
+        )
+        let payload = try? JSONEncoder().encode(metrics)
+        let message = MultipeerMessage(type: .qosMetrics, payload: payload)
+        sendMessage(message)
+    }
+
     // MARK: - Cleanup
 
     func stopAll() {
@@ -708,6 +769,46 @@ extension MultipeerService: MCSessionDelegate {
                 } else {
                     print("[Multipeer] ⚠️ Received audio message with no payload")
                 }
+
+            // ADAPTIVE STREAMING: QoS monitoring message handlers (Chalk-style)
+
+            case .ping:
+                // Received ping - respond with pong immediately
+                if let payload = message.payload,
+                   let ping = try? JSONDecoder().decode(PingMessage.self, from: payload) {
+                    // Auto-respond with pong
+                    self.sendPong(pingId: ping.pingId)
+                    self.onPingReceived?(ping.pingId)
+                }
+
+            case .pong:
+                // Received pong - calculate RTT
+                if let payload = message.payload,
+                   let pong = try? JSONDecoder().decode(PongMessage.self, from: payload) {
+                    self.onPongReceived?(pong.pingId)
+                }
+
+            case .streamingModeChange:
+                // Peer changed streaming mode
+                if let payload = message.payload,
+                   let modeMsg = try? JSONDecoder().decode(StreamingModeMessage.self, from: payload) {
+                    print("[Multipeer] 🎯 Received mode change: \(modeMsg.mode)")
+                    self.onStreamingModeChanged?(modeMsg.mode)
+                }
+
+            case .frameMetadata:
+                // Received frame metadata for freeze-frame mode
+                if let payload = message.payload,
+                   let metadata = try? JSONDecoder().decode(FrameMetadata.self, from: payload) {
+                    self.onFrameMetadataReceived?(metadata)
+                }
+
+            case .qosMetrics:
+                // Received QoS metrics from peer
+                if let payload = message.payload,
+                   let metrics = try? JSONDecoder().decode(QoSMetricsMessage.self, from: payload) {
+                    self.onQoSMetricsReceived?(metrics.rttMs, metrics.jitterMs, metrics.packetLossPct)
+                }
             }
         }
     }
@@ -822,6 +923,13 @@ struct MultipeerMessage: Codable {
         case spsPps  // SPS/PPS parameter sets (sent once at stream start)
         case frozenFrame
         case audioData
+
+        // ADAPTIVE STREAMING: QoS monitoring and mode switching (Chalk-style)
+        case ping  // RTT measurement - sender to receiver
+        case pong  // RTT measurement - response from receiver
+        case streamingModeChange  // Notify mode switch (normal/lowBandwidth/freezeFrame/audioOnly)
+        case frameMetadata  // Camera intrinsics + pose for freeze-frame mode
+        case qosMetrics  // Share QoS metrics (RTT, jitter, packet loss)
     }
 
     let type: MessageType
@@ -856,4 +964,41 @@ struct DeviceOrientation: Codable {
 struct VideoFrameData: Codable {
     let imageData: Data
     let orientation: DeviceOrientation
+}
+
+// MARK: - Adaptive Streaming Data Structures (Chalk-style)
+
+/// Ping message for RTT measurement
+struct PingMessage: Codable {
+    let pingId: String
+    let timestamp: Date
+}
+
+/// Pong response for RTT measurement
+struct PongMessage: Codable {
+    let pingId: String
+    let timestamp: Date
+}
+
+/// Streaming mode change notification
+struct StreamingModeMessage: Codable {
+    let mode: String  // "normal", "lowBandwidth", "freezeFrame", "audioOnly"
+    let timestamp: Date
+}
+
+/// Frame metadata for freeze-frame mode (Chalk-style)
+struct FrameMetadata: Codable {
+    let frameId: String
+    let timestamp: Date
+    let cameraIntrinsics: [Float]  // 3x3 matrix flattened
+    let worldFromCamera: [Float]  // 4x4 transform matrix flattened
+    let trackingState: String
+}
+
+/// QoS metrics sharing
+struct QoSMetricsMessage: Codable {
+    let rttMs: Double
+    let jitterMs: Double
+    let packetLossPct: Double
+    let timestamp: Date
 }
