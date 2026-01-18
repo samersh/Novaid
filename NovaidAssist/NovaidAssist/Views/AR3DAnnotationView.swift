@@ -45,16 +45,19 @@ struct AR3DAnnotationView: UIViewRepresentable {
 
         func setupAnchorCallback() {
             // Setup callback to receive annotation anchor updates from iPhone
-            MultipeerService.shared.onAnnotationAnchorDataReceived = { [weak self] anchorData in
-                guard let self = self, let arView = self.arView, let arReconstruction = self.arReconstruction else { return }
+            Task { @MainActor in
+                MultipeerService.shared.onAnnotationAnchorDataReceived = { [weak self] anchorData in
+                    guard let self = self, let arView = self.arView, let arReconstruction = self.arReconstruction else { return }
 
-                // Process anchor data through AR reconstruction manager
-                arReconstruction.processAnnotationAnchor(anchorData, in: arView)
+                    // Process anchor data through AR reconstruction manager
+                    Task { @MainActor in
+                        arReconstruction.processAnnotationAnchor(anchorData, in: arView)
+                        print("[AR3D] 📍 Processed anchor for annotation: \(anchorData.annotationId)")
+                    }
+                }
 
-                print("[AR3D] 📍 Processed anchor for annotation: \(anchorData.annotationId)")
+                print("[AR3D] ✅ Annotation anchor callback setup complete")
             }
-
-            print("[AR3D] ✅ Annotation anchor callback setup complete")
         }
 
         func setupCameraAnchor() {
