@@ -121,17 +121,21 @@ struct ARCameraView: UIViewRepresentable {
             }
 
             // Set up pong callback to record RTT
-            MultipeerService.shared.onPongReceived = { [weak self] pingId in
-                guard let self = self else { return }
-                self.qosMonitor.recordPongReceived(pingId: pingId)
+            Task { @MainActor in
+                MultipeerService.shared.onPongReceived = { [weak self] pingId in
+                    guard let self = self else { return }
+                    self.qosMonitor.recordPongReceived(pingId: pingId)
 
-                // Periodically send QoS metrics to iPad
-                let metrics = self.qosMonitor.getCurrentMetrics()
-                MultipeerService.shared.sendQoSMetrics(
-                    rttMs: metrics.rttMs,
-                    jitterMs: metrics.jitterMs,
-                    packetLossPct: metrics.packetLossPct
-                )
+                    // Periodically send QoS metrics to iPad
+                    let metrics = self.qosMonitor.getCurrentMetrics()
+                    Task { @MainActor in
+                        MultipeerService.shared.sendQoSMetrics(
+                            rttMs: metrics.rttMs,
+                            jitterMs: metrics.jitterMs,
+                            packetLossPct: metrics.packetLossPct
+                        )
+                    }
+                }
             }
 
             // Start ping-pong RTT measurement
