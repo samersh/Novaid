@@ -3,6 +3,7 @@ import SwiftUI
 struct ProfessionalVideoCallView: View {
     @StateObject private var multipeerService = MultipeerService.shared
     @StateObject private var audioService = AudioService.shared
+    @StateObject private var arReconstruction = iPadARReconstruction()
     @EnvironmentObject var callManager: CallManager
     @Environment(\.dismiss) private var dismiss
 
@@ -29,7 +30,8 @@ struct ProfessionalVideoCallView: View {
                 // 3D AR Annotations overlay - constrained to video area
                 AR3DAnnotationView(
                     annotations: callManager.annotations,
-                    containerSize: CGSize(width: videoFrame.width, height: videoFrame.height)
+                    containerSize: CGSize(width: videoFrame.width, height: videoFrame.height),
+                    arReconstruction: arReconstruction
                 )
                 .frame(width: videoFrame.width, height: videoFrame.height)
                 .position(x: videoFrame.midX, y: videoFrame.midY)
@@ -90,6 +92,7 @@ struct ProfessionalVideoCallView: View {
             startControlsTimer()
             setupAnnotationCallback()
             setupAudioCallbacks()
+            setupARReconstruction()
             // Start audio capture
             audioService.startAudioCapture()
         }
@@ -335,6 +338,31 @@ struct ProfessionalVideoCallView: View {
     private func setupAnnotationCallback() {
         // Setup is now done via onAnnotationCreated callback in DrawingCanvasView
         // This method remains for any additional setup if needed
+    }
+
+    private func setupARReconstruction() {
+        // Setup callbacks for AR reconstruction data from iPhone
+        print("[Professional] 🎬 Setting up iPad AR reconstruction callbacks")
+
+        // Receive depth maps from iPhone
+        multipeerService.onDepthMapReceived = { [weak arReconstruction] depthMap in
+            arReconstruction?.processDepthMap(depthMap)
+        }
+
+        // Receive detected planes from iPhone
+        multipeerService.onDetectedPlanesReceived = { [weak arReconstruction] planesData in
+            arReconstruction?.processDetectedPlanes(planesData)
+        }
+
+        // Receive 3D anchor data for annotations from iPhone
+        // Note: This will be handled in AR3DAnnotationView since it has access to ARView
+        multipeerService.onAnnotationAnchorDataReceived = { [weak arReconstruction] anchorData in
+            // Store for AR3DAnnotationView to use
+            print("[Professional] 📍 Received anchor data for annotation: \(anchorData.annotationId)")
+            // AR3DAnnotationView will pull this data and process it
+        }
+
+        print("[Professional] ✅ iPad AR reconstruction callbacks ready")
     }
 
     private func setupAudioCallbacks() {

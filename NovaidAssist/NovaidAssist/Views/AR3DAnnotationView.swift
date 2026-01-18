@@ -4,13 +4,16 @@ import ARKit
 
 /// 3D annotation view for iPad that displays AR annotations with depth and perspective
 /// Uses RealityKit to render 3D shapes overlaid on the 2D video stream
+/// Integrates with iPadARReconstruction for true 3D positioning from iPhone data
 struct AR3DAnnotationView: UIViewRepresentable {
     let annotations: [Annotation]
     let containerSize: CGSize
+    let arReconstruction: iPadARReconstruction
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
         context.coordinator.arView = arView
+        context.coordinator.arReconstruction = arReconstruction
 
         // Configure for overlay mode (no camera, just 3D overlay)
         arView.environment.background = .color(.clear)
@@ -19,7 +22,10 @@ struct AR3DAnnotationView: UIViewRepresentable {
         // Create camera anchor for perspective rendering
         context.coordinator.setupCameraAnchor()
 
-        print("[AR3D] ✅ AR 3D annotation view initialized")
+        // Setup callback for annotation anchor updates from iPhone
+        context.coordinator.setupAnchorCallback()
+
+        print("[AR3D] ✅ AR 3D annotation view initialized with AR reconstruction")
         return arView
     }
 
@@ -33,8 +39,23 @@ struct AR3DAnnotationView: UIViewRepresentable {
 
     class Coordinator {
         var arView: ARView?
+        var arReconstruction: iPadARReconstruction?
         private var annotationEntities: [String: AnchorEntity] = [:]
         private var cameraAnchor: AnchorEntity?
+
+        func setupAnchorCallback() {
+            // Setup callback to receive annotation anchor updates from iPhone
+            MultipeerService.shared.onAnnotationAnchorDataReceived = { [weak self] anchorData in
+                guard let self = self, let arView = self.arView, let arReconstruction = self.arReconstruction else { return }
+
+                // Process anchor data through AR reconstruction manager
+                arReconstruction.processAnnotationAnchor(anchorData, in: arView)
+
+                print("[AR3D] 📍 Processed anchor for annotation: \(anchorData.annotationId)")
+            }
+
+            print("[AR3D] ✅ Annotation anchor callback setup complete")
+        }
 
         func setupCameraAnchor() {
             guard let arView = arView else { return }
